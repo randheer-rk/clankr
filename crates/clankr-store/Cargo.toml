@@ -1,0 +1,28 @@
+[package]
+name = "clankr-store"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+# Private Postgres for `clankrd --dev` and tests; production points DATABASE_URL at a real server.
+embedded = ["dep:postgresql_embedded"]
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+clankr-types = { path = "../clankr-types" }
+postgresql_embedded = { version = "0.22", optional = true, default-features = false, features = ["theseus", "tokio", "tls-rustls-ring"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json", "uuid", "chrono", "migrate", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.11.1"
+hex = "0.4.3"
+serde = { workspace = true, features = ["derive"] }
+aes-gcm = "0.11"
+getrandom = "0.4.3"
+
+[dev-dependencies]
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
+clankr-store = { path = ".", features = ["embedded"] }
