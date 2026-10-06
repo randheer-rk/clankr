@@ -1,0 +1,16 @@
+[package]
+name = "clank"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+clankr-types = { path = "../clankr-types" }
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+serde_yaml_ng = "0.10"
+chrono = "0.4"
