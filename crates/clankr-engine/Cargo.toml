@@ -1,0 +1,25 @@
+[package]
+name = "clankr-engine"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+clankr-types = { path = "../clankr-types" }
+clankr-store = { path = "../clankr-store" }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "json", "uuid", "chrono"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.11"
+hex = "0.4"
+tokio = { version = "1", features = ["time"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+clankr-store = { path = "../clankr-store", features = ["embedded"] }
+proptest = "1"
+serde_yaml_ng = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
