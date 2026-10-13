@@ -1,0 +1,61 @@
+//! Secrets (write-only) and the model gateway.
+//!
+//!   PUT    /v1/namespaces/{ns}/secrets/{name}   {data: {key: value}}  -> metadata (never values)
+//!   GET    /v1/namespaces/{ns}/secrets[/{name}]                      -> metadata
+//!   DELETE /v1/namespaces/{ns}/secrets/{name}
+//!   POST   /v1/namespaces/{ns}/models/{claim}/generate                -> text, usage, provenance
+
+use std::collections::BTreeMap;
+
+use axum::extract::{Extension, Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use clankr_gateway::{GenerateRequest, GenerateResponse};
+use clankr_store::secrets::SecretMeta;
+use clankr_types::RequestCtx;
+use serde::Deserialize;
+
+use crate::contexts::writer;
+use crate::{ApiResult, AppState};
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/v1/namespaces/{ns}/secrets", get(list))
+        .route("/v1/namespaces/{ns}/secrets/{name}", get(meta).put(put).delete(remove))
+        .route("/v1/namespaces/{ns}/models/{claim}/generate", post(generate))
+}
+
+#[derive(Deserialize)]
+struct PutBody {
+    data: BTreeMap<String, String>,
+}
+
+async fn put(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path((ns, name)): Path<(String, String)>, Json(b): Json<PutBody>) -> ApiResult<Json<SecretMeta>> {
+    Ok(Json(s.store.secret_put(&ctx, &s.master, &ns, &name, &b.data).await?))
+}
+
+async fn meta(State(s): State<AppState>, Path((ns, name)): Path<(String, String)>) -> ApiResult<Json<SecretMeta>> {
+    Ok(Json(s.store.secret_meta(&ns, &name).await?))
+}
+
+async fn list(State(s): State<AppState>, Path(ns): Path<String>) -> ApiResult<Json<Vec<SecretMeta>>> {
+    Ok(Json(s.store.secret_list(&ns).await?))
+}
+
+async fn remove(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path((ns, name)): Path<(String, String)>) -> ApiResult<StatusCode> {
+    s.store.secret_delete(&ctx, &ns, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn generate(
+    State(s): State<AppState>,
+    Extension(ctx): Extension<RequestCtx>,
+    headers: HeaderMap,
+    Path((ns, claim)): Path<(String, String)>,
+    Json(req): Json<GenerateRequest>,
+) -> ApiResult<Json<GenerateResponse>> {
+    let claims = crate::workload(&s, &ctx, &headers, &ns, None).await?;
+    let ctx = RequestCtx { actor: writer(&ctx, &headers, claims.as_ref()), ..ctx };
+    Ok(Json(s.gateway.generate(&ctx, &ns, &claim, req).await?))
+}

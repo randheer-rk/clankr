@@ -1,0 +1,25 @@
+[package]
+name = "clankr-gateway"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clankr-types = { path = "../clankr-types" }
+clankr-store = { path = "../clankr-store" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
+tokio = { version = "1", features = ["time"] }
+url = "2"
+uuid = { version = "1", features = ["serde"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+axum = "0.8"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+clankr-store = { path = "../clankr-store", features = ["embedded"] }
+uuid = { version = "1", features = ["v4"] }
