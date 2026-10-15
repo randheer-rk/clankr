@@ -1,0 +1,30 @@
+[package]
+name = "clankr-node"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clankr-types = { path = "../clankr-types" }
+clankr-tls = { path = "../clankr-tls" }
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "signal", "time", "sync", "io-util", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.11"
+hex = "0.4.3"
+chrono = "0.4.45"
+
+[dev-dependencies]
+tempfile = "3"
+clankrd = { path = "../clankrd" }
+clankr-store = { path = "../clankr-store", features = ["embedded"] }
+axum = "0.8"
+clankr-engine = { path = "../clankr-engine" }
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "uuid"] }
