@@ -1,0 +1,15 @@
+# Clankr Python agent base image: CPython + the Clankr agent SDK (ABI v1).
+# Build: kennel build -t clankr/agent-python:0.1 sdk/python
+# Agents derive from it by digest and set their own AGENT_ENTRYPOINT.
+FROM docker.io/library/python@sha256:1148dbb014615300fa7e713b2f94f550c0d1c69780c0805f84f093ceee34dd0b
+COPY clankr/ /opt/clankr/python/clankr/
+ENV PYTHONPATH=/opt/clankr/python
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+LABEL org.clankr.sdk=python/0.1.0
+# agents run as nobody; image files stay root-owned and read-only to them (CL-32-01)
+USER 65534:65534
+# smoke test: the SDK imports in the sandbox (CL-24-05)
+RUN python3 -c "import clankr; print('clankr sdk', clankr.__version__)"
+AGENT_ENTRYPOINT ["python3", "-c", "import sys; sys.exit('clankr/agent-python is a base image: set AGENT_ENTRYPOINT in your agent Kennelfile')"]
+REQUIRE_RUNTIME_ABI v1
