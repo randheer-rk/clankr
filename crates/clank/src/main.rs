@@ -10,6 +10,8 @@ use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde_json::Value;
 
+mod oidc;
+
 #[derive(Parser)]
 #[command(version, about = "Clankr command-line client")]
 struct Cli {
@@ -87,6 +89,25 @@ enum Cmd {
     },
     /// Who the server thinks you are.
     Whoami,
+    /// Sign in with your identity provider (OIDC device flow). Commands then use your ID token,
+    /// refreshed automatically; CLANKR_TOKEN still overrides.
+    Login {
+        #[arg(long, env = "CLANKR_OIDC_ISSUER")]
+        issuer: String,
+        #[arg(long, env = "CLANKR_OIDC_CLIENT_ID")]
+        client_id: String,
+        #[arg(long, default_value = "openid email groups offline_access")]
+        scope: String,
+    },
+    /// Forget the saved login.
+    Logout,
+    /// Quotas, budgets and model spend for a namespace.
+    Usage {
+        #[arg(short, long, default_value = "default")]
+        namespace: String,
+        #[arg(short, long, value_enum, default_value_t = Output::Table)]
+        output: Output,
+    },
     /// ServiceAccount API tokens (the account itself is a resource: `clank apply`).
     Token {
         #[arg(short, long, default_value = "default", global = true)]
@@ -244,6 +265,22 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    match &cli.cmd {
+        Cmd::Login { issuer, client_id, scope } => {
+            oidc::login(&oidc::session_path(), issuer, client_id, scope)?;
+            eprintln!("Logged in. Check with: clank whoami");
+            return Ok(());
+        }
+        Cmd::Logout => {
+            match std::fs::remove_file(oidc::session_path()) {
+                Ok(()) => eprintln!("Logged out."),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => eprintln!("Not logged in."),
+                Err(e) => return Err(e.into()),
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     // no overall timeout: watches stream indefinitely
     let mut builder = Client::builder().timeout(None);
     if cli.server.starts_with("https://") {
@@ -341,6 +378,8 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Token { namespace, cmd } => token_cmd(&api, &namespace, cmd),
+        Cmd::Login { .. } | Cmd::Logout => unreachable!("handled before connecting"),
+        Cmd::Usage { namespace, output } => usage(&api, &namespace, output),
         Cmd::Mailbox { namespace, cmd } => mailbox_cmd(&api, &namespace, cmd),
         Cmd::Worker { namespace, queue, exec, owner, ttl_seconds, max_tasks } => worker(&api, &namespace, &queue, &exec, &owner, ttl_seconds, max_tasks),
         Cmd::Delete { kind, name, namespace } => {
@@ -353,8 +392,12 @@ fn run(cli: Cli) -> Result<()> {
     }
 }
 
+/// CLANKR_TOKEN, else your `clank login` session, else the local owner token file.
 fn token() -> Result<String> {
     if let Ok(t) = std::env::var("CLANKR_TOKEN") {
+        return Ok(t);
+    }
+    if let Some(t) = oidc::bearer(&oidc::session_path())? {
         return Ok(t);
     }
     let dir = std::env::var_os("XDG_CONFIG_HOME")
@@ -686,6 +729,58 @@ fn worker(api: &Api, ns: &str, queue: &str, exec: &str, owner: &str, ttl: u64, m
             Err(e) => eprintln!("  {task} result rejected: {e:#}"),
         }
         done += 1;
+    }
+    Ok(())
+}
+
+fn usage(api: &Api, ns: &str, output: Output) -> Result<()> {
+    let u: Value = ok(api.req(reqwest::Method::GET, &format!("/v1/namespaces/{ns}/usage")).send()?)?.json()?;
+    match output {
+        Output::Json => {
+            println!("{}", serde_json::to_string_pretty(&u)?);
+            return Ok(());
+        }
+        Output::Yaml => {
+            print!("{}", serde_yaml_ng::to_string(&u)?);
+            return Ok(());
+        }
+        Output::Table => {}
+    }
+    let pct = |used: f64, limit: f64| if limit > 0.0 { format!("{:.0}%", 100.0 * used / limit) } else { "-".into() };
+    let num = |v: &Value| v.as_f64().unwrap_or(0.0);
+    let mut rows = vec![];
+    for q in u["quotas"].as_array().into_iter().flatten() {
+        let (used, hard) = (num(&q["used"]), num(&q["hard"]));
+        rows.push(vec!["quota".into(), q["resource"].as_str().unwrap_or("?").into(), format!("{used}"), format!("{hard}"), pct(used, hard)]);
+    }
+    for b in u["budgets"].as_array().into_iter().flatten() {
+        let name = format!("{} ({})", b["name"].as_str().unwrap_or("?"), b["window"].as_str().unwrap_or("?"));
+        if let Some(t) = b.get("tokens") {
+            let used = num(&t["used"]) + num(&t["reserved"]);
+            rows.push(vec!["budget".into(), format!("{name} tokens"), format!("{used}"), format!("{}", num(&t["limit"])), pct(used, num(&t["limit"]))]);
+        }
+        if let Some(c) = b.get("costUSD") {
+            let used = num(&c["used"]) + num(&c["reserved"]);
+            rows.push(vec!["budget".into(), format!("{name} cost"), format!("${used:.4}"), format!("${:.2}", num(&c["limit"])), pct(used, num(&c["limit"]))]);
+        }
+    }
+    if rows.is_empty() {
+        eprintln!("No quotas or budgets in {ns}.");
+    } else {
+        print_table(&["TYPE", "NAME", "USED", "LIMIT", "%"].map(String::from), &rows);
+    }
+    let spend: Vec<Vec<String>> = u["modelSpendThisMonth"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            let cost = c["costUSD"].as_f64().map_or("-".into(), |v| format!("${v:.4}"));
+            vec![c["claim"].as_str().unwrap_or("?").into(), c["calls"].to_string(), c["inputTokens"].to_string(), c["outputTokens"].to_string(), cost]
+        })
+        .collect();
+    if !spend.is_empty() {
+        println!();
+        print_table(&["CLAIM", "CALLS", "IN TOKENS", "OUT TOKENS", "COST (MONTH)"].map(String::from), &spend);
     }
     Ok(())
 }

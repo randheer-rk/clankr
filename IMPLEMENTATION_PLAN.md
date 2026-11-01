@@ -204,7 +204,8 @@ Deferred: multi-stage builds (M2), multi-arch via binfmt/qemu (M4), and a remote
 
 M4 (operations beta):
 - [x] Identity + RBAC (ADR 0011): ServiceAccount API tokens (hashed, TTL, revoke), OIDC ID-token login (JWKS discovery, iss/aud/exp/nbf, asymmetric only), RoleBindings with built-in roles (viewer/editor/approver/admin/cluster-admin), `clankr-system` bindings cluster-wide, central route→permission check, denials audited; `clank whoami`, `clank token create|list|revoke`
-- [ ] Quotas and budgets
+- [x] RBAC follow-ups: revision-keyed binding cache, JWKS rotation test, `clank login` (device flow + silent refresh) / `logout`
+- [x] Quotas and budgets (ADR 0012): ResourceQuota (cpus/memoryMiB/instances/volumeMiB/activeRuns/count/<plural>) under a per-namespace advisory lock, increase-only refusal; AgentBudget (day/month/total, tokens + USD) reserved atomically with claim limits; ProviderConnection pricing, per-call cost ledger, claim cost limits; `GET .../usage` + `clank usage`
 - [ ] Approval inbox (action-bound, approver groups, no self-approval)
 - [ ] Minimal web UI
 - [ ] Backup/restore runbook + restore drill

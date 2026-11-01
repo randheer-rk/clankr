@@ -39,6 +39,26 @@ pub struct ProviderConnectionSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_ref: Option<SecretRef>,
     pub allowed_models: Vec<String>,
+    /// Per-model prices; needed for any cost budget. Applied price is recorded per call.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pricing: BTreeMap<String, Price>,
+}
+
+/// USD per million tokens (numerically: micro-USD per token).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Price {
+    #[serde(rename = "inputUSDPerMTok")]
+    pub input: f64,
+    #[serde(rename = "outputUSDPerMTok")]
+    pub output: f64,
+}
+
+impl Price {
+    /// Cost in micro-USD, rounded up so reservations never under-count.
+    pub fn micro_usd(&self, input_tokens: i64, output_tokens: i64) -> i64 {
+        (input_tokens as f64 * self.input + output_tokens as f64 * self.output).ceil() as i64
+    }
 }
 
 /// `kind: ModelClaim` spec.
@@ -72,8 +92,8 @@ fn default_max_output() -> u32 {
     4096
 }
 
-/// Token ceilings. Enforced before dispatch with reservations, so parallel calls can't overshoot.
-// ponytail: tokens only; currency budgets need a versioned price table (MOD-04)
+/// Token and cost ceilings. Enforced before dispatch with reservations, so parallel calls can't
+/// overshoot. Cost limits need `pricing` for the model on the ProviderConnection.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Budget {
@@ -81,6 +101,21 @@ pub struct Budget {
     pub max_tokens_per_run: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens_total: Option<i64>,
+    #[serde(default, rename = "maxCostUSDPerRun", skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd_per_run: Option<f64>,
+    #[serde(default, rename = "maxCostUSDTotal", skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd_total: Option<f64>,
+}
+
+/// One counter row in `model_usage`: (key, scope) with a hard max, in tokens or micro-USD.
+#[derive(Debug, Clone)]
+struct Bucket {
+    key: String,
+    scope: String,
+    max: i64,
+    cost: bool,
+    /// Human name for errors.
+    what: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,7 +248,16 @@ impl Gateway {
         }
 
         let reservation = est_in + i64::from(max_out);
-        let scopes = self.reserve(ns, claim_name, &claim.budget, req.run_id, reservation).await?;
+        let buckets = self.buckets(ns, claim_name, &claim.budget, req.run_id).await?;
+        let price = conn.pricing.get(&claim.model).copied();
+        if price.is_none() && buckets.iter().any(|b| b.cost) {
+            return Err(ApiError::new(
+                ErrorCode::Forbidden,
+                format!("a cost budget applies but ProviderConnection {} has no pricing for {}", claim.provider_connection, claim.model),
+            ));
+        }
+        let cost_reservation = price.map_or(0, |p| p.micro_usd(est_in, i64::from(max_out)));
+        self.reserve(&buckets, ns, reservation, cost_reservation).await?;
 
         let api_key = match &conn.secret_ref {
             Some(r) => Some(self.store.secret_read(ctx, &self.master, ns, &r.name, &r.key, &format!("model gateway: ModelClaim {claim_name}")).await?),
@@ -234,10 +278,11 @@ impl Gateway {
         span.record("input_tokens", usage.input_tokens);
         span.record("output_tokens", usage.output_tokens);
         span.record("outcome", outcome.as_str());
-        self.settle(ns, claim_name, &scopes, reservation, usage.input_tokens + usage.output_tokens).await?;
+        let cost = price.map(|p| p.micro_usd(usage.input_tokens, usage.output_tokens));
+        self.settle(&buckets, ns, (reservation, usage.input_tokens + usage.output_tokens), (cost_reservation, cost.unwrap_or(0))).await?;
         sqlx::query(
-            "insert into model_calls (namespace, claim, connection, provider, model, run_id, task, actor, input_tokens, output_tokens, latency_ms, outcome, stop_reason)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+            "insert into model_calls (namespace, claim, connection, provider, model, run_id, task, actor, input_tokens, output_tokens, latency_ms, outcome, stop_reason, cost_micro_usd)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(ns)
         .bind(claim_name)
@@ -252,6 +297,7 @@ impl Gateway {
         .bind(latency)
         .bind(&outcome)
         .bind(stop)
+        .bind(cost)
         .execute(self.store.pool())
         .await
         .map_err(clankr_store::db)?;
@@ -260,21 +306,43 @@ impl Gateway {
         Ok(GenerateResponse { text, stop_reason, usage, provider: conn.provider, model: claim.model, connection: claim.provider_connection })
     }
 
-    /// Atomically reserves `amount` in every budgeted scope (total and/or this run), or none.
-    async fn reserve(&self, ns: &str, claim: &str, b: &Budget, run: Option<Uuid>, amount: i64) -> Result<Vec<String>, ApiError> {
-        let mut scopes: BTreeMap<String, i64> = BTreeMap::new();
-        if let Some(max) = b.max_tokens_total {
-            scopes.insert("total".into(), max);
+    /// Every counter this call must fit: the claim's own limits and each AgentBudget in the
+    /// namespace (current calendar window). Sorted, so concurrent reservations lock rows in the
+    /// same order and can't deadlock.
+    async fn buckets(&self, ns: &str, claim: &str, b: &Budget, run: Option<Uuid>) -> Result<Vec<Bucket>, ApiError> {
+        let mut out = vec![];
+        let mut add = |key: String, scope: String, max: Option<i64>, cost: bool, what: String| {
+            if let Some(max) = max {
+                out.push(Bucket { key, scope, max, cost, what });
+            }
+        };
+        let usd = |v: Option<f64>| v.map(clankr_types::quota::micro_usd);
+        add(claim.into(), "total".into(), b.max_tokens_total, false, format!("ModelClaim {claim}: total token budget"));
+        add(format!("cost:{claim}"), "total".into(), usd(b.max_cost_usd_total), true, format!("ModelClaim {claim}: total cost budget"));
+        if let Some(run) = run {
+            add(claim.into(), run.to_string(), b.max_tokens_per_run, false, format!("ModelClaim {claim}: per-run token budget (run {run})"));
+            add(format!("cost:{claim}"), run.to_string(), usd(b.max_cost_usd_per_run), true, format!("ModelClaim {claim}: per-run cost budget (run {run})"));
         }
-        if let (Some(max), Some(run)) = (b.max_tokens_per_run, run) {
-            scopes.insert(run.to_string(), max);
+        let now = chrono::Utc::now();
+        for r in self.store.list("AgentBudget", Some(ns), &Default::default()).await?.0 {
+            let spec = clankr_types::quota::admit_agent_budget(&r.spec)?;
+            let (name, window) = (&r.metadata.name, spec.period.window(now));
+            add(format!("budget:{name}"), window.clone(), spec.max_tokens, false, format!("AgentBudget {name}: token budget for {window}"));
+            add(format!("budget-cost:{name}"), window.clone(), usd(spec.max_cost_usd), true, format!("AgentBudget {name}: cost budget for {window}"));
         }
+        out.sort_by(|a, b| (&a.key, &a.scope).cmp(&(&b.key, &b.scope)));
+        Ok(out)
+    }
+
+    /// Atomically reserves in every bucket (tokens or micro-USD), or in none.
+    async fn reserve(&self, buckets: &[Bucket], ns: &str, tokens: i64, cost: i64) -> Result<(), ApiError> {
         let mut tx = self.store.pool().begin().await.map_err(clankr_store::db)?;
-        for (scope, max) in &scopes {
+        for b in buckets {
+            let amount = if b.cost { cost } else { tokens };
             sqlx::query("insert into model_usage (namespace, claim, scope) values ($1, $2, $3) on conflict do nothing")
                 .bind(ns)
-                .bind(claim)
-                .bind(scope)
+                .bind(&b.key)
+                .bind(&b.scope)
                 .execute(&mut *tx)
                 .await
                 .map_err(clankr_store::db)?;
@@ -283,36 +351,41 @@ impl Gateway {
                  where namespace = $1 and claim = $2 and scope = $3 and used + reserved + $4 <= $5",
             )
             .bind(ns)
-            .bind(claim)
-            .bind(scope)
+            .bind(&b.key)
+            .bind(&b.scope)
             .bind(amount)
-            .bind(max)
+            .bind(b.max)
             .execute(&mut *tx)
             .await
             .map_err(clankr_store::db)?
             .rows_affected();
             if ok == 0 {
-                let which = if scope == "total" { "total".to_owned() } else { format!("per-run (run {scope})") };
-                return Err(ApiError::new(
-                    ErrorCode::QuotaExceeded,
-                    format!("ModelClaim {claim}: {which} token budget {max} can't fit this request (~{amount} tokens reserved)"),
-                ));
+                let (limit, need) = if b.cost {
+                    (format!("${:.2}", b.max as f64 / 1e6), format!("~${:.4} reserved", amount as f64 / 1e6))
+                } else {
+                    (b.max.to_string(), format!("~{amount} tokens reserved"))
+                };
+                return Err(ApiError::new(ErrorCode::QuotaExceeded, format!("{} {limit} can't fit this request ({need})", b.what)));
             }
         }
-        tx.commit().await.map_err(clankr_store::db)?;
-        Ok(scopes.into_keys().collect())
+        tx.commit().await.map_err(clankr_store::db)
     }
 
-    async fn settle(&self, ns: &str, claim: &str, scopes: &[String], reserved: i64, used: i64) -> Result<(), ApiError> {
-        sqlx::query("update model_usage set reserved = reserved - $4, used = used + $5 where namespace = $1 and claim = $2 and scope = any($3)")
-            .bind(ns)
-            .bind(claim)
-            .bind(scopes)
-            .bind(reserved)
-            .bind(used)
-            .execute(self.store.pool())
-            .await
-            .map_err(clankr_store::db)
-            .map(drop)
+    /// Releases reservations and charges actual usage: `(reserved, used)` for tokens and cost.
+    async fn settle(&self, buckets: &[Bucket], ns: &str, tokens: (i64, i64), cost: (i64, i64)) -> Result<(), ApiError> {
+        let mut tx = self.store.pool().begin().await.map_err(clankr_store::db)?;
+        for b in buckets {
+            let (reserved, used) = if b.cost { cost } else { tokens };
+            sqlx::query("update model_usage set reserved = reserved - $4, used = used + $5 where namespace = $1 and claim = $2 and scope = $3")
+                .bind(ns)
+                .bind(&b.key)
+                .bind(&b.scope)
+                .bind(reserved)
+                .bind(used)
+                .execute(&mut *tx)
+                .await
+                .map_err(clankr_store::db)?;
+        }
+        tx.commit().await.map_err(clankr_store::db)
     }
 }

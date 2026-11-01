@@ -1,6 +1,7 @@
 //! Identity and access control (SEC-02, CL-31-03): who a bearer token belongs to (owner,
 //! ServiceAccount API token, or OIDC user) and whether their RoleBindings allow the request.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::extract::{Extension, Path, State};
@@ -48,22 +49,39 @@ pub(crate) async fn authorize(s: &AppState, p: &Principal, method: &str, path: &
     let Some((ns, perm)) = required(method, path) else { return Ok(()) };
     let subjects = p.subjects();
     // a binding in ns X applies to X; one in clankr-system applies everywhere
-    let mut scopes = vec![SYSTEM_NAMESPACE];
-    if let Some(n) = ns.as_deref().filter(|n| *n != SYSTEM_NAMESPACE) {
-        scopes.push(n);
-    }
-    // ponytail: reads bindings per request (1-2 indexed queries); cache by revision if it shows up in profiles
-    for scope in scopes {
-        let (bindings, _) = s.store.list("RoleBinding", Some(scope), &Default::default()).await.map_err(|e| e.message)?;
-        for b in bindings {
-            let Ok(spec) = serde_json::from_value::<RoleBindingSpec>(b.spec) else { continue };
-            if spec.role.grants(perm) && spec.subjects.iter().any(|x| subjects.contains(x)) {
-                return Ok(());
-            }
+    let applies = |bns: &str| bns == SYSTEM_NAMESPACE || ns.as_deref() == Some(bns);
+    for (bns, spec) in s.bindings.get(&s.store).await.map_err(|e| e.message)?.iter() {
+        if applies(bns) && spec.role.grants(perm) && spec.subjects.iter().any(|x| subjects.contains(x)) {
+            return Ok(());
         }
     }
     let at = ns.map_or_else(|| "cluster scope".to_owned(), |n| format!("namespace {n}"));
     Err(format!("{} lacks {perm:?} in {at}", p.actor()))
+}
+
+/// All RoleBindings as of a store revision. Each request costs one primary-key read of the
+/// revision; bindings are re-listed only after some resource changed, so a revoked binding
+/// stops working on the very next request.
+#[derive(Clone, Default)]
+pub struct BindingCache(Arc<Mutex<Option<(i64, Bindings)>>>);
+
+/// (namespace, binding) pairs.
+type Bindings = Arc<Vec<(String, RoleBindingSpec)>>;
+
+impl BindingCache {
+    async fn get(&self, store: &clankr_store::Store) -> Result<Bindings, clankr_types::ApiError> {
+        let rev = store.revision().await?;
+        let mut c = self.0.lock().await;
+        if let Some((at, b)) = c.as_ref()
+            && *at == rev
+        {
+            return Ok(b.clone());
+        }
+        let (items, at) = store.list("RoleBinding", None, &Default::default()).await?;
+        let b: Bindings = Arc::new(items.into_iter().filter_map(|r| Some((r.metadata.namespace, serde_json::from_value(r.spec).ok()?))).collect());
+        *c = Some((at, b.clone()));
+        Ok(b)
+    }
 }
 
 /// OIDC ID-token verification against the issuer's published keys.
@@ -72,17 +90,18 @@ pub struct Oidc {
     pub audience: String,
     pub user_claim: String,
     pub groups_claim: String,
+    /// Minimum time between JWKS refetches triggered by unknown key ids.
+    pub min_refresh: Duration,
     http: reqwest::Client,
     keys: Mutex<Option<(JwkSet, Instant)>>,
 }
 
 const ALGS: &[Algorithm] = &[Algorithm::RS256, Algorithm::RS384, Algorithm::RS512, Algorithm::PS256, Algorithm::ES256, Algorithm::ES384, Algorithm::EdDSA];
-const MIN_REFRESH: Duration = Duration::from_secs(30);
 
 impl Oidc {
     pub fn new(issuer: String, audience: String, user_claim: String, groups_claim: String) -> Self {
         let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().expect("http client");
-        Self { issuer: issuer.trim_end_matches('/').to_owned(), audience, user_claim, groups_claim, http, keys: Mutex::new(None) }
+        Self { issuer: issuer.trim_end_matches('/').to_owned(), audience, user_claim, groups_claim, min_refresh: Duration::from_secs(30), http, keys: Mutex::new(None) }
     }
 
     async fn fetch_keys(&self) -> Result<JwkSet, String> {
@@ -102,7 +121,7 @@ impl Oidc {
     /// rotation is picked up without a restart.
     async fn key(&self, kid: &str) -> Result<DecodingKey, String> {
         let mut keys = self.keys.lock().await;
-        let stale = keys.as_ref().is_none_or(|(set, at)| set.find(kid).is_none() && at.elapsed() > MIN_REFRESH);
+        let stale = keys.as_ref().is_none_or(|(set, at)| set.find(kid).is_none() && at.elapsed() > self.min_refresh);
         if stale {
             match self.fetch_keys().await {
                 Ok(set) => *keys = Some((set, Instant::now())),

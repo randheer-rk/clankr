@@ -80,6 +80,13 @@ async fn start(
     Json(b): Json<StartBody>,
 ) -> ApiResult<(StatusCode, Json<RunView>)> {
     let key = b.idempotency_key.or_else(|| headers.get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned));
+    // a retried start returns its run even when the namespace is now at its activeRuns limit
+    if let Some(k) = &key
+        && let Some(run) = s.engine.by_idempotency_key(&ns, k).await?
+    {
+        return Ok((StatusCode::CREATED, Json(run)));
+    }
+    let _quota = crate::quota::admit_run(&s.store, &ns).await?;
     let run = s.engine.start(&ctx, &ns, &name, b.input, key.as_deref()).await?;
     Ok((StatusCode::CREATED, Json(run)))
 }

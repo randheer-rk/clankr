@@ -452,6 +452,8 @@ name = "clank"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "base64 0.23.1",
  "chrono",
  "clankr-types",
  "clap",
@@ -460,6 +462,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -488,8 +492,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "clankr-store",
  "clankr-types",
+ "futures-util",
  "reqwest",
  "rustls",
  "serde",

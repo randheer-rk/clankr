@@ -38,6 +38,7 @@ pub mod tls;
 mod mailboxes;
 mod models;
 mod nodes;
+mod quota;
 mod runs;
 pub mod scheduler;
 
@@ -61,6 +62,7 @@ pub struct AppState {
     pub signer: identity::Signer,
     /// OIDC user login; None = owner token and ServiceAccount tokens only.
     pub oidc: Option<Arc<authz::Oidc>>,
+    pub bindings: authz::BindingCache,
 }
 
 impl AppState {
@@ -72,6 +74,7 @@ impl AppState {
         Ok(Self {
             ca: None,
             oidc: None,
+            bindings: Default::default(),
             signer: identity::Signer::derive(&master.to_hex()),
             engine: clankr_engine::Engine::new(store.clone()),
             gateway: clankr_gateway::Gateway::new(store.clone(), master.clone()),
@@ -118,6 +121,7 @@ pub fn router(state: AppState) -> Router {
         .merge(mailboxes::routes())
         .merge(nodes::routes())
         .merge(authz::routes())
+        .merge(quota::routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
@@ -323,6 +327,8 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "AgentMailbox" => clankr_types::agent::admit_mailbox(&r.spec).map(drop),
         "RoleBinding" => clankr_types::rbac::admit_role_binding(&r.spec).map(drop),
         "ServiceAccount" => clankr_types::rbac::admit_service_account(&r.spec).map(drop),
+        "ResourceQuota" => clankr_types::quota::admit_resource_quota(&r.spec).map(drop),
+        "AgentBudget" => clankr_types::quota::admit_agent_budget(&r.spec).map(drop),
         _ => Ok(()),
     }
 }
@@ -432,6 +438,7 @@ async fn create(
     Json(r): Json<Resource>,
 ) -> ApiResult<(StatusCode, Json<Resource>)> {
     check_target(&r, &ns, kind(&plural)?, None)?;
+    let _quota = quota::admit(&s.store, &r).await?;
     if q.dry_run {
         return Ok((StatusCode::OK, Json(r)));
     }
@@ -462,6 +469,7 @@ async fn update(
     Json(r): Json<Resource>,
 ) -> ApiResult<Json<Resource>> {
     check_target(&r, &ns, kind(&plural)?, Some(&name))?;
+    let _quota = quota::admit(&s.store, &r).await?;
     if q.dry_run {
         return Ok(Json(r));
     }

@@ -158,7 +158,7 @@ impl Engine {
         self.get(ns, run_id).await
     }
 
-    async fn by_idempotency_key(&self, ns: &str, key: &str) -> Result<Option<RunView>, ApiError> {
+    pub async fn by_idempotency_key(&self, ns: &str, key: &str) -> Result<Option<RunView>, ApiError> {
         let id: Option<Uuid> = sqlx::query_scalar("select run_id from workflow_runs where namespace = $1 and idempotency_key = $2")
             .bind(ns)
             .bind(key)

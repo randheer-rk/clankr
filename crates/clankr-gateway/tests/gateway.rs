@@ -180,3 +180,49 @@ fn endpoint_admission() {
     let no_secret = json!({"provider": "anthropic", "endpoint": "https://api.anthropic.com", "allowedModels": ["claude-opus-5"]});
     assert_eq!(admit_connection(&no_secret).unwrap_err().field.as_deref(), Some("spec.secretRef"));
 }
+
+/// Namespace AgentBudgets and claim cost limits (CL-27-06, MOD-013): priced per call, reserved
+/// before dispatch so parallel calls can't overshoot, refused when a cost limit has no price.
+#[tokio::test]
+async fn agent_budgets_and_cost_limits() {
+    let (_pg, s, gw) = setup().await;
+    // 10 input + 100 output tokens (the request's max) at $3/$15 per MTok = 1530 micro-USD per call;
+    // the reservation is ~2 input + 100 output = 1506
+    let reply = json!({"choices": [{"message": {"content": "ok"}, "finish_reason": "length"}], "usage": {"prompt_tokens": 10, "completion_tokens": 100}});
+    let (url, _) = fake("/chat/completions", StatusCode::OK, reply).await;
+    let conn = |pricing: Value| json!({"provider": "openai-compatible", "endpoint": url, "secretRef": {"name": "llm", "key": "apiKey"}, "allowedModels": ["m"], "pricing": pricing});
+    for r in [
+        res("ProviderConnection", "priced", conn(json!({"m": {"inputUSDPerMTok": 3.0, "outputUSDPerMTok": 15.0}}))),
+        res("ProviderConnection", "unpriced", conn(json!({}))),
+        res("ModelClaim", "c", json!({"providerConnection": "priced", "model": "m", "limits": {"maxOutputTokens": 500}})),
+        res("ModelClaim", "capped", json!({"providerConnection": "unpriced", "model": "m", "budget": {"maxCostUSDTotal": 1.0}})),
+        res("AgentBudget", "daily", json!({"period": "day", "maxCostUSD": 0.004})),
+    ] {
+        s.create(&ctx(), r).await.unwrap();
+    }
+    assert!(admit_connection(&json!({"provider": "mock", "allowedModels": ["m"], "pricing": {"m": {"input": 1}}})).is_err());
+
+    // $0.004 holds two ~$0.0015 reservations, never three, however many race
+    let c = ctx();
+    let calls = (0..8).map(|_| gw.generate(&c, NS, "c", ask("hi")));
+    let results = futures_util::future::join_all(calls).await;
+    let ok = results.iter().filter(|r| r.is_ok()).count();
+    assert_eq!(ok, 2, "{results:?}");
+    let err = results.into_iter().find_map(Result::err).unwrap();
+    assert_eq!(err.code, ErrorCode::QuotaExceeded);
+    assert!(err.message.contains("AgentBudget daily: cost budget for day:"), "{}", err.message);
+    let cost: i64 = sqlx::query_scalar("select sum(cost_micro_usd)::bigint from model_calls where claim = 'c'").fetch_one(s.pool()).await.unwrap();
+    assert_eq!(cost, 2 * 1530, "applied price recorded per call");
+
+    // a cost limit without a price fails closed, before anything is sent
+    let e = gw.generate(&ctx(), NS, "capped", ask("hi")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Forbidden);
+    assert!(e.message.contains("no pricing"), "{}", e.message);
+
+    // token budgets cover every claim in the namespace
+    s.delete(&ctx(), NS, "AgentBudget", "daily", None).await.unwrap();
+    s.create(&ctx(), res("AgentBudget", "tokens", json!({"period": "month", "maxTokens": 200}))).await.unwrap();
+    gw.generate(&ctx(), NS, "c", ask("hi")).await.unwrap();
+    let e = gw.generate(&ctx(), NS, "c", ask("hi")).await.unwrap_err();
+    assert!(e.message.contains("AgentBudget tokens: token budget for month:"), "{}", e.message);
+}

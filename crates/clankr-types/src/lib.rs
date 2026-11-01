@@ -8,6 +8,7 @@ use serde_json::Value;
 
 pub mod agent;
 pub mod protocol;
+pub mod quota;
 pub mod rbac;
 
 pub const API_VERSION: &str = "clankr.io/v1alpha1";

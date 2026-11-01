@@ -10,7 +10,13 @@ serde_json.workspace = true
 serde.workspace = true
 clankr-types = { path = "../clankr-types" }
 clap = { version = "4", features = ["derive", "env"] }
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "rustls-no-provider"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "form", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 serde_yaml_ng = "0.10"
 chrono = "0.4"
+base64 = "0.23"
+
+[dev-dependencies]
+axum = "0.8"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

@@ -40,6 +40,20 @@ impl Store {
         &self.pool
     }
 
+    /// Current cluster-wide resource revision (bumped by every resource write).
+    pub async fn revision(&self) -> Result<i64, ApiError> {
+        sqlx::query_scalar("select rev from revision").fetch_one(&self.pool).await.map_err(db)
+    }
+
+    /// Serializes check-then-write sequences on one namespace across all clankrd replicas
+    /// (quota admission). The lock lives as long as the returned transaction; dropping it
+    /// (including on cancellation) rolls back and releases.
+    pub async fn namespace_lock(&self, ns: &str) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, ApiError> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended('clankr-ns:' || $1, 0))").bind(ns).execute(&mut *tx).await.map_err(db)?;
+        Ok(tx)
+    }
+
     pub async fn ping(&self) -> Result<(), ApiError> {
         sqlx::query("select 1").execute(&self.pool).await.map(drop).map_err(db)
     }

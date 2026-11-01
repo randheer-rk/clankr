@@ -1,6 +1,8 @@
 //! Access control (SEC-02, CL-31-03, E2E-12): ServiceAccount tokens and OIDC users get exactly
 //! what their RoleBindings grant; everything else is denied and audited.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -133,42 +135,64 @@ async fn service_account_tokens_and_role_bindings() {
     assert_eq!(s.call("clk_made-up", M::GET, "/v1/whoami", None).await.0, StatusCode::UNAUTHORIZED);
 }
 
-/// Minimal IdP: discovery + JWKS for one P-256 key.
+/// Minimal IdP: discovery + a JWKS that can gain keys (rotation).
 struct Idp {
     issuer: String,
-    key: jsonwebtoken::EncodingKey,
+    jwks: Arc<Mutex<Vec<Value>>>,
+    keys: Mutex<HashMap<String, jsonwebtoken::EncodingKey>>,
 }
 
 async fn idp() -> Idp {
-    let kp = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-    let raw = kp.public_key_raw(); // 0x04 || x || y
-    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
-    let jwks = json!({"keys": [{"kty": "EC", "crv": "P-256", "kid": "k1", "use": "sig", "alg": "ES256", "x": b64(&raw[1..33]), "y": b64(&raw[33..])}]});
+    let jwks: Arc<Mutex<Vec<Value>>> = Arc::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let issuer = format!("http://{}", listener.local_addr().unwrap());
     let disc = json!({"issuer": issuer, "jwks_uri": format!("{issuer}/jwks")});
+    let served = jwks.clone();
     let app = axum::Router::new()
         .route("/.well-known/openid-configuration", axum::routing::get(move || async move { axum::Json(disc) }))
-        .route("/jwks", axum::routing::get(move || async move { axum::Json(jwks) }));
+        .route("/jwks", axum::routing::get(move || async move { axum::Json(json!({"keys": *served.lock().unwrap()})) }));
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Idp { issuer, key: jsonwebtoken::EncodingKey::from_ec_pem(kp.serialize_pem().as_bytes()).unwrap() }
+    let idp = Idp { issuer, jwks, keys: Mutex::default() };
+    idp.add_key("k1");
+    idp
 }
 
 impl Idp {
+    fn add_key(&self, kid: &str) {
+        let kp = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let raw = kp.public_key_raw(); // 0x04 || x || y
+        let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+        self.jwks.lock().unwrap().push(json!({"kty": "EC", "crv": "P-256", "kid": kid, "use": "sig", "alg": "ES256", "x": b64(&raw[1..33]), "y": b64(&raw[33..])}));
+        self.keys.lock().unwrap().insert(kid.into(), jsonwebtoken::EncodingKey::from_ec_pem(kp.serialize_pem().as_bytes()).unwrap());
+    }
+
+    /// Signed with `kid`'s key if the IdP has it, else with a throwaway key under that kid.
     fn token(&self, kid: &str, claims: Value) -> String {
         let now = chrono::Utc::now().timestamp();
         let mut c = json!({"iss": self.issuer, "aud": "clankr", "iat": now, "exp": now + 300, "email": "ana@example.com", "groups": ["sre"]});
         c.as_object_mut().unwrap().extend(claims.as_object().unwrap().clone());
         let mut h = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
         h.kid = Some(kid.into());
-        jsonwebtoken::encode(&h, &c, &self.key).unwrap()
+        let keys = self.keys.lock().unwrap();
+        let other;
+        let key = match keys.get(kid) {
+            Some(k) => k,
+            None => {
+                let kp = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+                other = jsonwebtoken::EncodingKey::from_ec_pem(kp.serialize_pem().as_bytes()).unwrap();
+                &other
+            }
+        };
+        jsonwebtoken::encode(&h, &c, key).unwrap()
     }
 }
 
 #[tokio::test]
 async fn oidc_users_are_verified_and_bound_by_group() {
     let idp = idp().await;
-    let s = start(Some(clankrd::authz::Oidc::new(idp.issuer.clone(), "clankr".into(), "email".into(), "groups".into()))).await;
+    let mut oidc = clankrd::authz::Oidc::new(idp.issuer.clone(), "clankr".into(), "email".into(), "groups".into());
+    oidc.min_refresh = Duration::from_millis(200);
+    let s = start(Some(oidc)).await;
     let good = idp.token("k1", json!({}));
 
     let (st, who) = s.call(&good, M::GET, "/v1/whoami", None).await;
@@ -197,4 +221,16 @@ async fn oidc_users_are_verified_and_bound_by_group() {
     ] {
         assert_eq!(s.call(&bad, M::GET, "/v1/whoami", None).await.0, StatusCode::UNAUTHORIZED, "{what}");
     }
+
+    // IdP key rotation: a token from a key published after startup verifies once the cache
+    // refresh window has passed, without restarting clankrd
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    idp.add_key("k2");
+    let rotated = idp.token("k2", json!({}));
+    assert_eq!(s.call(&rotated, M::GET, "/v1/whoami", None).await.0, StatusCode::OK);
+    assert_eq!(s.call(&good, M::GET, "/v1/whoami", None).await.0, StatusCode::OK, "old key still published");
+
+    // deleting a binding takes effect on the very next request (cache keyed by revision)
+    s.owner(M::DELETE, "/v1/namespaces/ops/rolebindings/sre-approve", Value::Null).await;
+    assert_eq!(s.call(&good, M::GET, "/v1/namespaces/ops/agents", None).await.0, StatusCode::FORBIDDEN);
 }
