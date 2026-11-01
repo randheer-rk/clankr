@@ -155,4 +155,27 @@ impl Store {
         tx.commit().await.map_err(db)?;
         Ok(value)
     }
+
+    /// Decrypts every stored secret without returning or auditing values. Returns the number
+    /// checked and the `namespace/name` of any that fail (wrong master key or tampered row).
+    pub async fn secrets_check(&self, master: &MasterKey) -> Result<(usize, Vec<String>), ApiError> {
+        let rows = sqlx::query("select namespace, name, version, nonce, ciphertext from secrets order by namespace, name")
+            .fetch_all(self.pool())
+            .await
+            .map_err(db)?;
+        let cipher = Aes256Gcm::new(&master.0);
+        let mut bad = vec![];
+        for r in &rows {
+            let (ns, name, version): (String, String, i64) = (r.get("namespace"), r.get("name"), r.get("version"));
+            let nonce: Vec<u8> = r.get("nonce");
+            let ct: Vec<u8> = r.get("ciphertext");
+            let ok = <[u8; 12]>::try_from(nonce.as_slice())
+                .ok()
+                .is_some_and(|n| cipher.decrypt(&Nonce::from(n), Payload { msg: &ct, aad: &aad(&ns, &name, version) }).is_ok());
+            if !ok {
+                bad.push(format!("{ns}/{name}"));
+            }
+        }
+        Ok((rows.len(), bad))
+    }
 }

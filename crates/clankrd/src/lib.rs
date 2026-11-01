@@ -32,6 +32,7 @@ use tokio::sync::watch;
 
 mod approvals;
 pub mod authz;
+pub mod backup;
 mod contexts;
 pub mod identity;
 pub mod telemetry;

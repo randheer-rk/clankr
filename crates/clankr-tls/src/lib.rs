@@ -57,6 +57,14 @@ impl Ca {
             }
             return Ok(Self { cert_pem: std::fs::read_to_string(&crt)?, key: KeyPair::from_pem(&std::fs::read_to_string(&key)?)? });
         }
+        if crt.exists() {
+            // a restored cluster without its CA key: minting a new CA would silently orphan every node
+            bail!(
+                "{} exists but {} is missing: restore the CA key from escrow, or move ca.crt aside to start a new CA (every node must then re-join)",
+                crt.display(),
+                key.display()
+            );
+        }
         std::fs::create_dir_all(dir)?;
         let key_pair = KeyPair::generate()?;
         let mut p = CertificateParams::default();
@@ -159,6 +167,9 @@ mod tests {
         let left = not_after_pem(&cert).unwrap() - time::OffsetDateTime::now_utc().unix_timestamp();
         assert!((NODE_CERT_DAYS * 86400 - 60..=NODE_CERT_DAYS * 86400 + 60).contains(&left), "{left}");
         assert!(ca.sign_node_csr("not a csr", "x").is_err());
+        // a certificate without its key is refused, not silently replaced
+        std::fs::remove_file(dir.path().join("ca.key")).unwrap();
+        assert!(Ca::load_or_create(dir.path()).err().unwrap().to_string().contains("ca.key is missing"));
         let (scert, skey) = ca.server_cert(&["localhost".into(), "127.0.0.1".into()]).unwrap();
         ca.server_config(&scert, &skey).unwrap();
     }

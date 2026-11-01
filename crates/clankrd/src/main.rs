@@ -39,6 +39,32 @@ struct Args {
     oidc_user_claim: String,
     #[arg(long, env = "CLANKR_OIDC_GROUPS_CLAIM", default_value = "groups")]
     oidc_groups_claim: String,
+    /// Directory with pg_dump/pg_restore (default: PATH, or the embedded server's with --dev).
+    #[arg(long, env = "CLANKR_PG_BIN", global = true)]
+    pg_bin: Option<PathBuf>,
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+/// Without a subcommand clankrd serves the API.
+#[derive(clap::Subcommand)]
+enum Cmd {
+    /// Write a consistent backup (database snapshot + manifest + CA cert) to a new directory.
+    Backup {
+        out: PathBuf,
+        /// Also copy master.key and ca.key into the backup. Off by default: escrow keys separately.
+        #[arg(long)]
+        include_keys: bool,
+    },
+    /// Restore a backup into an empty database, then verify it.
+    Restore {
+        dir: PathBuf,
+        /// Master key file when the backup doesn't include it (or set CLANKR_MASTER_KEY).
+        #[arg(long)]
+        master_key_file: Option<PathBuf>,
+    },
+    /// Check a database against a backup's manifest (audit chain, secrets, run replay, counts).
+    Verify { dir: PathBuf },
 }
 
 #[tokio::main]
@@ -60,6 +86,11 @@ async fn main() -> anyhow::Result<()> {
             url
         }
     };
+
+    let pg_bin = args.pg_bin.clone().or_else(|| _dev_pg.as_ref().map(DevPostgres::bin_dir));
+    if let Some(cmd) = args.cmd {
+        return run_maintenance(cmd, &url, &data_dir, pg_bin.as_deref()).await;
+    }
 
     let store = Store::connect(&url).await.context("connect metadata store")?;
     let master = load_or_create_master_key(&data_dir)?;
@@ -113,6 +144,57 @@ async fn main() -> anyhow::Result<()> {
         let _ = p.shutdown();
     }
     Ok(())
+}
+
+async fn run_maintenance(cmd: Cmd, url: &str, data_dir: &std::path::Path, pg_bin: Option<&std::path::Path>) -> anyhow::Result<()> {
+    use clankrd::backup;
+    let print = |r: &backup::Report| {
+        for c in &r.checks {
+            println!("{} {:<11} {}", if c.ok { "ok  " } else { "FAIL" }, c.name, c.detail);
+        }
+    };
+    match cmd {
+        Cmd::Backup { out, include_keys } => {
+            let master = existing_master_key(data_dir, None)?;
+            let m = backup::backup(backup::BackupOpts { database_url: url, out: &out, master: &master, data_dir, include_keys, pg_bin }).await?;
+            println!("backup written to {}", out.display());
+            println!("  revision {} · audit seq {} · schema {} · {} tables", m.revision, m.audit_seq, m.schema_version, m.rows.len());
+            if !include_keys {
+                println!("  keys not included: the master key (sha256 {}) must be escrowed separately", &m.master_key_sha256[..16]);
+            }
+            Ok(())
+        }
+        Cmd::Restore { dir, master_key_file } => {
+            let fallback = existing_master_key(data_dir, master_key_file.as_deref()).ok();
+            let master = backup::restore_key(&dir, fallback)?;
+            let r = backup::restore(backup::RestoreOpts { dir: &dir, database_url: url, master: &master, data_dir, pg_bin }).await?;
+            print(&r);
+            anyhow::ensure!(r.ok(), "restore finished but verification failed; do not serve from this database");
+            println!("restored and verified; start clankrd normally (pending schema migrations apply on start)");
+            let ca_key = data_dir.join("pki/ca.key");
+            if !ca_key.exists() {
+                println!("next: put the escrowed CA key at {} before starting, or nodes can't authenticate", ca_key.display());
+            }
+            Ok(())
+        }
+        Cmd::Verify { dir } => {
+            let m = backup::read_manifest(&dir)?;
+            let master = backup::restore_key(&dir, existing_master_key(data_dir, None).ok())?;
+            let r = backup::verify(url, &master, &m).await?;
+            print(&r);
+            anyhow::ensure!(r.ok(), "verification failed");
+            Ok(())
+        }
+    }
+}
+
+/// The master key from CLANKR_MASTER_KEY, an explicit file, or `<data-dir>/master.key`. Never creates one.
+fn existing_master_key(data_dir: &std::path::Path, file: Option<&std::path::Path>) -> anyhow::Result<MasterKey> {
+    if let Ok(k) = std::env::var("CLANKR_MASTER_KEY") {
+        return MasterKey::from_hex(&k);
+    }
+    let path = file.map_or_else(|| data_dir.join("master.key"), std::path::Path::to_path_buf);
+    MasterKey::from_hex(&std::fs::read_to_string(&path).with_context(|| format!("read master key {}", path.display()))?)
 }
 
 /// Secret-encryption key (SEC-09): CLANKR_MASTER_KEY (hex) or `<data-dir>/master.key` (0600).

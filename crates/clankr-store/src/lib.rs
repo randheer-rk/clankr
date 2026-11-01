@@ -31,9 +31,23 @@ pub type Tx = Transaction<'static, Postgres>;
 
 impl Store {
     pub async fn connect(url: &str) -> anyhow::Result<Self> {
-        let pool = PgPoolOptions::new().max_connections(16).connect(url).await?;
-        sqlx::migrate!().run(&pool).await?;
-        Ok(Self { pool })
+        let s = Self::open(url).await?;
+        s.migrate().await?;
+        Ok(s)
+    }
+
+    /// Connects without touching the schema (backup verification inspects it as-is).
+    pub async fn open(url: &str) -> anyhow::Result<Self> {
+        Ok(Self { pool: PgPoolOptions::new().max_connections(16).connect(url).await? })
+    }
+
+    pub async fn migrate(&self) -> anyhow::Result<()> {
+        Ok(sqlx::migrate!().run(&self.pool).await?)
+    }
+
+    /// Newest schema migration this binary knows (backups record and check it).
+    pub fn schema_version() -> i64 {
+        sqlx::migrate!().iter().map(|m| m.version).max().unwrap_or(0)
     }
 
     pub fn pool(&self) -> &PgPool {

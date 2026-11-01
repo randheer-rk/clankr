@@ -26,6 +26,11 @@ impl DevPostgres {
         Ok(Self { pg })
     }
 
+    /// Where this server's binaries (pg_dump, pg_restore, …) live.
+    pub fn bin_dir(&self) -> PathBuf {
+        self.pg.settings().binary_dir()
+    }
+
     /// Creates `name` if missing and returns its connection URL.
     pub async fn database(&self, name: &str) -> anyhow::Result<String> {
         if !self.pg.database_exists(name).await? {
