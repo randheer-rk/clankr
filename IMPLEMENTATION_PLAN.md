@@ -200,4 +200,13 @@ Deferred: multi-stage builds (M2), multi-arch via binfmt/qemu (M4), and a remote
 - [x] OpenTelemetry tracing (ADR 0010): request/engine/task/model/scheduler spans, traceparent continuation, OTLP/HTTP export verified against a live receiver
 - [x] Node certificate rotation with a 5-minute overlap (stress test: work keeps completing across repeated rotations)
 
-**M3 complete.** Next: M4 (operations beta): RBAC/OIDC, quotas/budgets dashboard, approval inbox, UI, backup/restore runbook, eval harness, image promotion.
+**M3 complete.**
+
+M4 (operations beta):
+- [x] Identity + RBAC (ADR 0011): ServiceAccount API tokens (hashed, TTL, revoke), OIDC ID-token login (JWKS discovery, iss/aud/exp/nbf, asymmetric only), RoleBindings with built-in roles (viewer/editor/approver/admin/cluster-admin), `clankr-system` bindings cluster-wide, central route→permission check, denials audited; `clank whoami`, `clank token create|list|revoke`
+- [ ] Quotas and budgets
+- [ ] Approval inbox (action-bound, approver groups, no self-approval)
+- [ ] Minimal web UI
+- [ ] Backup/restore runbook + restore drill
+- [ ] Eval harness (golden traces)
+- [ ] Image promotion by digest

@@ -24,11 +24,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use clankr_store::Store;
+use clankr_types::rbac::Principal;
 use clankr_types::{ApiError, ErrorCode, RequestCtx, Resource, WatchEvent, WatchEventType, kind_for, validate_envelope};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::watch;
 
+pub mod authz;
 mod contexts;
 pub mod identity;
 pub mod telemetry;
@@ -57,6 +59,8 @@ pub struct AppState {
     /// Cluster CA (signs node certificates). None when serving plain HTTP: nodes can't join.
     pub ca: Option<Arc<clankr_tls::Ca>>,
     pub signer: identity::Signer,
+    /// OIDC user login; None = owner token and ServiceAccount tokens only.
+    pub oidc: Option<Arc<authz::Oidc>>,
 }
 
 impl AppState {
@@ -67,6 +71,7 @@ impl AppState {
     pub async fn with_join_token(store: Store, token: String, master: clankr_store::secrets::MasterKey, join_token: String) -> anyhow::Result<Self> {
         Ok(Self {
             ca: None,
+            oidc: None,
             signer: identity::Signer::derive(&master.to_hex()),
             engine: clankr_engine::Engine::new(store.clone()),
             gateway: clankr_gateway::Gateway::new(store.clone(), master.clone()),
@@ -112,6 +117,7 @@ pub fn router(state: AppState) -> Router {
         .merge(models::routes())
         .merge(mailboxes::routes())
         .merge(nodes::routes())
+        .merge(authz::routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
@@ -174,12 +180,38 @@ async fn auth(State(s): State<AppState>, mut req: Request, next: Next) -> Respon
         Some(p) => s.store.node_for_credential(&p.fingerprint).await.ok().flatten(),
         None => None,
     };
-    let mut resp = match (presented, node) {
-        // ponytail: single owner identity until RBAC (M4)
-        (Some(t), _) if ct_eq(t.as_bytes(), s.token.as_bytes()) => {
-            tracing::Span::current().record("actor", "owner");
-            req.extensions_mut().insert(RequestCtx { actor: "owner".into(), request_id: request_id.clone() });
-            next.run(req).await
+    let principal = match presented {
+        // owner token: break-glass cluster-admin, every write audited under "owner"
+        Some(t) if ct_eq(t.as_bytes(), s.token.as_bytes()) => Some(Ok(Principal::Owner)),
+        Some(t) if node.is_none() => Some(authz::principal_for(&s, t).await),
+        _ => None,
+    };
+    let mut resp = match (principal, node) {
+        (Some(Ok(p)), _) => {
+            let ctx = RequestCtx { actor: p.actor(), request_id: request_id.clone() };
+            tracing::Span::current().record("actor", ctx.actor.as_str());
+            match authz::authorize(&s, &p, req.method().as_str(), req.uri().path()).await {
+                Ok(()) => {
+                    req.extensions_mut().insert(ctx);
+                    req.extensions_mut().insert(p);
+                    next.run(req).await
+                }
+                Err(reason) => {
+                    let action = format!("{} {}", req.method(), req.uri().path());
+                    if let Err(e) = s.store.audit_deny(&ctx, &action, &reason).await {
+                        return HttpError(e).into_response();
+                    }
+                    HttpError(ApiError::new(ErrorCode::Forbidden, reason)).into_response()
+                }
+            }
+        }
+        (Some(Err(reason)), _) => {
+            let ctx = RequestCtx { actor: "anonymous".into(), request_id: request_id.clone() };
+            let action = format!("{} {}", req.method(), req.uri().path());
+            if let Err(e) = s.store.audit_deny(&ctx, &action, &reason).await {
+                return HttpError(e).into_response();
+            }
+            HttpError(ApiError::new(ErrorCode::Unauthenticated, reason)).into_response()
         }
         // node credentials reach only the node surface; per-agent checks happen in handlers
         (_, Some(name)) => {
@@ -289,6 +321,8 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "AgentDeployment" => clankr_types::agent::admit_deployment(&r.spec).map(drop),
         "VolumeClaim" => clankr_types::agent::admit_volume_claim(&r.spec).map(drop),
         "AgentMailbox" => clankr_types::agent::admit_mailbox(&r.spec).map(drop),
+        "RoleBinding" => clankr_types::rbac::admit_role_binding(&r.spec).map(drop),
+        "ServiceAccount" => clankr_types::rbac::admit_service_account(&r.spec).map(drop),
         _ => Ok(()),
     }
 }

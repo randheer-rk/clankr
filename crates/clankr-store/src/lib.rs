@@ -14,6 +14,7 @@ pub mod cluster;
 pub mod context;
 pub mod mailbox;
 pub mod secrets;
+pub mod tokens;
 #[cfg(feature = "embedded")]
 pub mod embedded;
 

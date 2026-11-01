@@ -8,6 +8,7 @@ use serde_json::Value;
 
 pub mod agent;
 pub mod protocol;
+pub mod rbac;
 
 pub const API_VERSION: &str = "clankr.io/v1alpha1";
 
@@ -147,7 +148,7 @@ pub const KINDS: &[&str] = &[
     "SecretClaim", "AgentSecret", "AgentConfig", "AgentPolicy", "AgentBudget", "ResourceQuota",
     "PriorityClass", "Node", "AgentImage", "AgentBuild", "BuilderPool", "ImageRegistry", "BuildPolicy",
     "ImagePolicy", "SkillBundle", "ProviderConnection", "AgentRuntimeClass", "SecurityPolicy",
-    "NetworkPolicy", "ToolPolicy",
+    "NetworkPolicy", "ToolPolicy", "RoleBinding", "ServiceAccount",
 ];
 
 /// URL path segment for a kind: `AgentPolicy` -> `agentpolicies`, `AgentMailbox` -> `agentmailboxes`.

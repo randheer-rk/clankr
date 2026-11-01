@@ -28,6 +28,17 @@ struct Args {
     /// Extra names (DNS or IP) for the API server certificate.
     #[arg(long = "tls-san")]
     tls_san: Vec<String>,
+    /// OIDC issuer URL for user login (ID tokens as bearer tokens). Off when unset.
+    #[arg(long, env = "CLANKR_OIDC_ISSUER", requires = "oidc_audience")]
+    oidc_issuer: Option<String>,
+    /// Expected `aud` (your client id at the IdP).
+    #[arg(long, env = "CLANKR_OIDC_AUDIENCE")]
+    oidc_audience: Option<String>,
+    /// Claim naming the user in RoleBinding subjects (`user:<value>`).
+    #[arg(long, env = "CLANKR_OIDC_USER_CLAIM", default_value = "email")]
+    oidc_user_claim: String,
+    #[arg(long, env = "CLANKR_OIDC_GROUPS_CLAIM", default_value = "groups")]
+    oidc_groups_claim: String,
 }
 
 #[tokio::main]
@@ -57,6 +68,10 @@ async fn main() -> anyhow::Result<()> {
         Err(_) => load_or_create_secret_file("join-token")?,
     };
     let mut state = clankrd::AppState::with_join_token(store.clone(), load_or_create_token()?, master, join_token).await?;
+    if let (Some(issuer), Some(aud)) = (args.oidc_issuer, args.oidc_audience) {
+        tracing::info!(%issuer, "OIDC user login enabled");
+        state.oidc = Some(std::sync::Arc::new(clankrd::authz::Oidc::new(issuer, aud, args.oidc_user_claim, args.oidc_groups_claim)));
+    }
     let tls = if args.insecure_http {
         tracing::warn!("serving plain HTTP: credentials travel unencrypted and nodes can't join");
         None
@@ -125,8 +140,8 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
         .join("clankr")
 }
 
-/// Local owner token (CL-31-01 dev identity). The CLI reads the same file.
-// ponytail: single static owner token; OIDC + scoped API tokens arrive with RBAC in M4.
+/// Owner token: break-glass cluster-admin (everyone else uses OIDC or ServiceAccount tokens
+/// bound by RoleBindings). The CLI reads the same file.
 fn load_or_create_token() -> anyhow::Result<String> {
     if let Ok(t) = std::env::var("CLANKR_TOKEN") {
         return Ok(t);

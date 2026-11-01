@@ -85,6 +85,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SecretCmd,
     },
+    /// Who the server thinks you are.
+    Whoami,
+    /// ServiceAccount API tokens (the account itself is a resource: `clank apply`).
+    Token {
+        #[arg(short, long, default_value = "default", global = true)]
+        namespace: String,
+        #[command(subcommand)]
+        cmd: TokenCmd,
+    },
     /// Dev worker (trusted tier S0, no sandbox): leases tasks from a queue and runs a shell
     /// command per task. Task data is JSON on stdin; stdout (JSON, else a string) is the result.
     /// Exit 0 completes; exit 65 fails permanently; any other exit fails retryably.
@@ -125,6 +134,21 @@ enum MailboxCmd {
     },
     /// Move a dead-lettered message back to ready.
     Requeue { mailbox: String, id: String },
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+    /// Issue a token; it is printed once and can't be shown again.
+    Create {
+        service_account: String,
+        #[arg(long, default_value = "")]
+        description: String,
+        /// Lifetime in seconds (default: no expiry).
+        #[arg(long)]
+        ttl_seconds: Option<i64>,
+    },
+    List { service_account: String },
+    Revoke { service_account: String, id: String },
 }
 
 #[derive(Subcommand)]
@@ -311,6 +335,12 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Secret { namespace, cmd } => secret_cmd(&api, &namespace, cmd),
+        Cmd::Whoami => {
+            let v: Value = ok(api.req(reqwest::Method::GET, "/v1/whoami").send()?)?.json()?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            Ok(())
+        }
+        Cmd::Token { namespace, cmd } => token_cmd(&api, &namespace, cmd),
         Cmd::Mailbox { namespace, cmd } => mailbox_cmd(&api, &namespace, cmd),
         Cmd::Worker { namespace, queue, exec, owner, ttl_seconds, max_tasks } => worker(&api, &namespace, &queue, &exec, &owner, ttl_seconds, max_tasks),
         Cmd::Delete { kind, name, namespace } => {
@@ -656,6 +686,36 @@ fn worker(api: &Api, ns: &str, queue: &str, exec: &str, owner: &str, ttl: u64, m
             Err(e) => eprintln!("  {task} result rejected: {e:#}"),
         }
         done += 1;
+    }
+    Ok(())
+}
+
+fn token_cmd(api: &Api, ns: &str, cmd: TokenCmd) -> Result<()> {
+    use reqwest::Method as M;
+    let base = |sa: &str| format!("/v1/namespaces/{ns}/serviceaccounts/{sa}/tokens");
+    match cmd {
+        TokenCmd::Create { service_account, description, ttl_seconds } => {
+            let body = serde_json::json!({ "description": description, "ttlSeconds": ttl_seconds });
+            let t: Value = ok(api.req(M::POST, &base(&service_account)).json(&body).send()?)?.json()?;
+            eprintln!("token {} for serviceaccount {ns}/{service_account}; store it now, it can't be shown again:", t["id"].as_str().unwrap_or("?"));
+            println!("{}", t["token"].as_str().unwrap_or_default());
+        }
+        TokenCmd::List { service_account } => {
+            let l: Vec<Value> = ok(api.req(M::GET, &base(&service_account)).send()?)?.json()?;
+            let s = |v: &Value| v.as_str().unwrap_or("-").to_owned();
+            let rows: Vec<Vec<String>> = l
+                .iter()
+                .map(|t| {
+                    let state = if t["revokedAt"].is_string() { "revoked" } else { "active" };
+                    vec![s(&t["id"]), state.into(), s(&t["createdAt"]), s(&t["expiresAt"]), s(&t["description"])]
+                })
+                .collect();
+            print_table(&["ID", "STATE", "CREATED", "EXPIRES", "DESCRIPTION"].map(String::from), &rows);
+        }
+        TokenCmd::Revoke { service_account, id } => {
+            ok(api.req(M::DELETE, &format!("{}/{id}", base(&service_account))).send()?)?;
+            println!("token {id} revoked");
+        }
     }
     Ok(())
 }

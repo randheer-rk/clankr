@@ -34,6 +34,8 @@ opentelemetry = "0.33"
 opentelemetry_sdk = "0.33"
 tracing-opentelemetry = "0.34"
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 
 [dev-dependencies]
 tracing = "0.1"
@@ -41,5 +43,6 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "str
 futures-util = "0.3"
 opentelemetry_sdk = { version = "0.33", features = ["testing"] }
 tower = { version = "0.5", features = ["util"] }
+rcgen = "0.14"
 # reqwest ends up as rustls-no-provider via postgresql_embedded; pick ring explicitly
 
