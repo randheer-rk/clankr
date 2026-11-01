@@ -36,6 +36,7 @@ tracing-opentelemetry = "0.34"
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rust-embed = { version = "8", features = ["mime-guess"] }
 
 [dev-dependencies]
 tracing = "0.1"

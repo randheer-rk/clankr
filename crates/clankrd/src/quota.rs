@@ -173,5 +173,15 @@ async fn usage(State(s): State<AppState>, Path(ns): Path<String>) -> ApiResult<J
         .into_iter()
         .map(|(claim, i, o, c, n)| json!({"claim": claim, "calls": n, "inputTokens": i, "outputTokens": o, "costUSD": c.map(|c| c as f64 / 1e6)}))
         .collect();
-    Ok(Json(json!({"namespace": ns, "quotas": quotas, "budgets": budgets, "modelSpendThisMonth": claims})))
+    let days: Vec<(chrono::NaiveDate, i64, Option<i64>)> = sqlx::query_as(
+        "select (at at time zone 'utc')::date, coalesce(sum(input_tokens + output_tokens), 0)::bigint, sum(cost_micro_usd)::bigint
+         from model_calls where namespace = $1 and at >= date_trunc('month', now() at time zone 'utc') at time zone 'utc'
+         group by 1 order by 1",
+    )
+    .bind(&ns)
+    .fetch_all(s.store.pool())
+    .await
+    .map_err(clankr_store::db)?;
+    let by_day: Vec<Value> = days.into_iter().map(|(d, t, c)| json!({"day": d, "tokens": t, "costUSD": c.map(|c| c as f64 / 1e6)})).collect();
+    Ok(Json(json!({"namespace": ns, "quotas": quotas, "budgets": budgets, "modelSpendThisMonth": claims, "spendByDay": by_day})))
 }

@@ -52,6 +52,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/namespaces/{ns}/runs", get(list))
         .route("/v1/namespaces/{ns}/runs/{id}", get(read))
         .route("/v1/namespaces/{ns}/runs/{id}/history", get(history))
+        .route("/v1/namespaces/{ns}/runs/{id}/spend", get(spend))
         .route("/v1/namespaces/{ns}/runs/{id}/signal", post(signal))
         .route("/v1/namespaces/{ns}/runs/{id}/cancel", post(cancel))
         .route("/v1/namespaces/{ns}/tasks/lease", post(lease))
@@ -110,6 +111,20 @@ async fn read(State(s): State<AppState>, Path((ns, id)): Path<(String, String)>)
 
 async fn history(State(s): State<AppState>, Path((ns, id)): Path<(String, String)>) -> ApiResult<Json<Vec<HistoryEntry>>> {
     Ok(Json(s.engine.history(&ns, run_id(&id)?).await?))
+}
+
+/// Model usage attributed to one run (from the gateway's call ledger).
+async fn spend(State(s): State<AppState>, Path((ns, id)): Path<(String, String)>) -> ApiResult<Json<Value>> {
+    let (calls, input, output, cost): (i64, i64, i64, Option<i64>) = sqlx::query_as(
+        "select count(*), coalesce(sum(input_tokens), 0)::bigint, coalesce(sum(output_tokens), 0)::bigint, sum(cost_micro_usd)::bigint
+         from model_calls where namespace = $1 and run_id = $2",
+    )
+    .bind(&ns)
+    .bind(run_id(&id)?)
+    .fetch_one(s.store.pool())
+    .await
+    .map_err(clankr_store::db)?;
+    Ok(Json(serde_json::json!({"calls": calls, "inputTokens": input, "outputTokens": output, "costUSD": cost.map(|c| c as f64 / 1e6)})))
 }
 
 #[derive(Deserialize)]

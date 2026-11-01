@@ -35,6 +35,9 @@ pub struct RunView {
     pub workflow: String,
     pub workflow_generation: i64,
     pub graph_digest: String,
+    /// The pinned graph this run executes (for drawing it).
+    pub graph: Value,
+    pub started_by: Option<String>,
     pub status: RunStatus,
     pub seq: i64,
     pub state: RunState,
@@ -195,7 +198,7 @@ impl Engine {
 
     pub async fn get(&self, ns: &str, run_id: Uuid) -> Result<RunView, ApiError> {
         let row = sqlx::query(
-            "select run_id, namespace, workflow, workflow_generation, graph_digest, seq, state, created_at, updated_at
+            "select run_id, namespace, workflow, workflow_generation, graph_digest, graph, started_by, seq, state, created_at, updated_at
              from workflow_runs where run_id = $1 and namespace = $2",
         )
         .bind(run_id)
@@ -211,6 +214,8 @@ impl Engine {
             workflow: row.get("workflow"),
             workflow_generation: row.get("workflow_generation"),
             graph_digest: row.get("graph_digest"),
+            graph: row.get("graph"),
+            started_by: row.get("started_by"),
             status: state.status,
             seq: row.get("seq"),
             state,

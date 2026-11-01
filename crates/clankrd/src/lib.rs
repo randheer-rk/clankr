@@ -36,6 +36,7 @@ mod contexts;
 pub mod identity;
 pub mod telemetry;
 pub mod tls;
+mod ui;
 mod mailboxes;
 mod models;
 mod nodes;
@@ -130,6 +131,7 @@ pub fn router(state: AppState) -> Router {
         .route("/readyz", get(readyz))
         .merge(nodes::join_route())
         .merge(v1)
+        .fallback(ui::serve)
         .layer(middleware::from_fn(telemetry::http_span))
         .with_state(state)
 }

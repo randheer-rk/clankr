@@ -207,7 +207,7 @@ M4 (operations beta):
 - [x] RBAC follow-ups: revision-keyed binding cache, JWKS rotation test, `clank login` (device flow + silent refresh) / `logout`
 - [x] Quotas and budgets (ADR 0012): ResourceQuota (cpus/memoryMiB/instances/volumeMiB/activeRuns/count/<plural>) under a per-namespace advisory lock, increase-only refusal; AgentBudget (day/month/total, tokens + USD) reserved atomically with claim limits; ProviderConnection pricing, per-call cost ledger, claim cost limits; `GET .../usage` + `clank usage`
 - [x] Approval inbox (ADR 0013): request per approval visit bound to run/node/visit/data digest, approver role + group, no self-approval, digest-bound decisions, decided once (same txn as resume), deadlines → expired/onReject, cancelled with the run, raw approve.* signals refused; `clank approvals ls|show|approve|reject`
-- [ ] Minimal web UI
+- [x] Web UI (ADR 0014): "Vision" design signed off after 4 mockup rounds; Vite/React app in `ui/` embedded in clankrd; inbox, runs (live flow graph, activity, history, data, cost, cancel), agents, workflows (start run), budgets (spend chart + forecast, caps, quotas, spend by claim); token sign-in
 - [ ] Backup/restore runbook + restore drill
 - [ ] Eval harness (golden traces)
 - [ ] Image promotion by digest

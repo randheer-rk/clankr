@@ -55,6 +55,10 @@ async fn crud_errors_and_auth() {
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(s.http.get(format!("{}/healthz", s.base)).send().await.unwrap().status(), StatusCode::OK);
     assert_eq!(s.http.get(format!("{}/readyz", s.base)).send().await.unwrap().status(), StatusCode::OK);
+    // the web UI owns every non-API path; unknown API paths stay JSON 404s, never the app shell
+    let r = s.http.get(format!("{}/v1/nope/at/all", s.base)).send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+    assert_eq!(r.json::<Value>().await.unwrap()["code"], "NotFound");
 
     // dry run persists nothing
     let r = s.req(M::POST, &format!("{AGENTS}?dryRun=true")).json(&agent("a", "x@1")).send().await.unwrap();
