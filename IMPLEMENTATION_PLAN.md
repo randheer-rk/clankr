@@ -206,7 +206,7 @@ M4 (operations beta):
 - [x] Identity + RBAC (ADR 0011): ServiceAccount API tokens (hashed, TTL, revoke), OIDC ID-token login (JWKS discovery, iss/aud/exp/nbf, asymmetric only), RoleBindings with built-in roles (viewer/editor/approver/admin/cluster-admin), `clankr-system` bindings cluster-wide, central route→permission check, denials audited; `clank whoami`, `clank token create|list|revoke`
 - [x] RBAC follow-ups: revision-keyed binding cache, JWKS rotation test, `clank login` (device flow + silent refresh) / `logout`
 - [x] Quotas and budgets (ADR 0012): ResourceQuota (cpus/memoryMiB/instances/volumeMiB/activeRuns/count/<plural>) under a per-namespace advisory lock, increase-only refusal; AgentBudget (day/month/total, tokens + USD) reserved atomically with claim limits; ProviderConnection pricing, per-call cost ledger, claim cost limits; `GET .../usage` + `clank usage`
-- [ ] Approval inbox (action-bound, approver groups, no self-approval)
+- [x] Approval inbox (ADR 0013): request per approval visit bound to run/node/visit/data digest, approver role + group, no self-approval, digest-bound decisions, decided once (same txn as resume), deadlines → expired/onReject, cancelled with the run, raw approve.* signals refused; `clank approvals ls|show|approve|reject`
 - [ ] Minimal web UI
 - [ ] Backup/restore runbook + restore drill
 - [ ] Eval harness (golden traces)

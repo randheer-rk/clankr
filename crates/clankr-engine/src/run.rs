@@ -194,8 +194,10 @@ impl std::fmt::Display for Reject {
     }
 }
 
+pub const APPROVAL_PREFIX: &str = "approve.";
+
 pub fn approval_signal(node: &str) -> String {
-    format!("approve.{node}")
+    format!("{APPROVAL_PREFIX}{node}")
 }
 
 /// Resolves an `OutcomeUnknown` task. Payload: `{"outcome": "completed", "result": ...}`,

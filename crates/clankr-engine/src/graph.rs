@@ -83,6 +83,9 @@ pub enum NodeKind {
         approver_group: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         on_reject: Option<NodeId>,
+        /// Undecided after this long ("30m", "2d"): rejected as timed out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout: Option<String>,
     },
     /// Waits for a named signal.
     Signal { signal: String },
@@ -235,6 +238,12 @@ impl WorkflowSpec {
                 }
                 NodeKind::Approval { on_reject: Some(t), .. } if !self.nodes.contains_key(t) => {
                     err(at("onReject"), format!("unknown node {t:?}"));
+                }
+                NodeKind::Approval { timeout: Some(t), .. } if parse_duration(t).is_none() => {
+                    err(at("timeout"), format!("bad duration {t:?}"));
+                }
+                NodeKind::Approval { approver_group, .. } if approver_group.is_empty() => {
+                    err(at("approverGroup"), "approverGroup is required".into());
                 }
                 NodeKind::Timer { duration } if parse_duration(duration).is_none() => {
                     err(at("duration"), format!("bad duration {duration:?}"));

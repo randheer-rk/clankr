@@ -89,6 +89,13 @@ enum Cmd {
     },
     /// Who the server thinks you are.
     Whoami,
+    /// The approval inbox: what's waiting on a human decision.
+    Approvals {
+        #[arg(short, long, default_value = "default", global = true)]
+        namespace: String,
+        #[command(subcommand)]
+        cmd: ApprovalCmd,
+    },
     /// Sign in with your identity provider (OIDC device flow). Commands then use your ID token,
     /// refreshed automatically; CLANKR_TOKEN still overrides.
     Login {
@@ -158,6 +165,29 @@ enum MailboxCmd {
 }
 
 #[derive(Subcommand)]
+enum ApprovalCmd {
+    /// Pending approvals you can decide (--all: everything pending; --state for history).
+    Ls {
+        #[arg(long)]
+        all: bool,
+        #[arg(long, default_value = "pending")]
+        state: String,
+    },
+    /// Show one request, including the run data it gates.
+    Show { id: String },
+    Approve {
+        id: String,
+        #[arg(long, default_value = "")]
+        comment: String,
+    },
+    Reject {
+        id: String,
+        #[arg(long, default_value = "")]
+        comment: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum TokenCmd {
     /// Issue a token; it is printed once and can't be shown again.
     Create {
@@ -204,14 +234,14 @@ enum RunCmd {
         #[arg(long, default_value = "null")]
         payload: String,
     },
-    /// Resolve an approval node.
+    /// Decide the pending approval at `node` of run `id` (shortcut for `clank approvals`).
     Approve {
         id: String,
         node: String,
         #[arg(long)]
         reject: bool,
-        #[arg(long)]
-        comment: Option<String>,
+        #[arg(long, default_value = "")]
+        comment: String,
     },
     Cancel {
         id: String,
@@ -378,6 +408,7 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Token { namespace, cmd } => token_cmd(&api, &namespace, cmd),
+        Cmd::Approvals { namespace, cmd } => approvals_cmd(&api, &namespace, cmd),
         Cmd::Login { .. } | Cmd::Logout => unreachable!("handled before connecting"),
         Cmd::Usage { namespace, output } => usage(&api, &namespace, output),
         Cmd::Mailbox { namespace, cmd } => mailbox_cmd(&api, &namespace, cmd),
@@ -636,8 +667,10 @@ fn run_cmd(api: &Api, ns: &str, cmd: RunCmd) -> Result<()> {
             run_summary(&ok(api.req(M::POST, &format!("{runs}/{id}/signal")).json(&body).send()?)?.json()?);
         }
         RunCmd::Approve { id, node, reject, comment } => {
-            let body = serde_json::json!({ "signal": format!("approve.{node}"), "payload": { "approved": !reject, "comment": comment } });
-            run_summary(&ok(api.req(M::POST, &format!("{runs}/{id}/signal")).json(&body).send()?)?.json()?);
+            let pending: Vec<Value> = ok(api.req(M::GET, &format!("/v1/namespaces/{ns}/approvals?state=pending")).send()?)?.json()?;
+            let a = pending.iter().find(|a| a["runId"] == id.as_str() && a["node"] == node.as_str()).with_context(|| format!("no pending approval at {node} in run {id}"))?;
+            decide_approval(api, ns, a["id"].as_str().unwrap_or_default(), !reject, &comment)?;
+            run_summary(&ok(api.req(M::GET, &format!("{runs}/{id}")).send()?)?.json()?);
         }
         RunCmd::Resolve { id, task, outcome, result, error } => {
             let body = serde_json::json!({ "signal": format!("resolve.{task}"), "payload": { "outcome": outcome, "result": json_arg(&result)?, "error": error } });
@@ -730,6 +763,46 @@ fn worker(api: &Api, ns: &str, queue: &str, exec: &str, owner: &str, ttl: u64, m
         }
         done += 1;
     }
+    Ok(())
+}
+
+fn approvals_cmd(api: &Api, ns: &str, cmd: ApprovalCmd) -> Result<()> {
+    use reqwest::Method as M;
+    let base = format!("/v1/namespaces/{ns}/approvals");
+    match cmd {
+        ApprovalCmd::Ls { all, state } => {
+            let mine = if all { "" } else { "&mine=true" };
+            let l: Vec<Value> = ok(api.req(M::GET, &format!("{base}?state={state}{mine}")).send()?)?.json()?;
+            let s = |v: &Value| v.as_str().unwrap_or("-").to_owned();
+            let rows: Vec<Vec<String>> = l
+                .iter()
+                .map(|a| vec![s(&a["id"]), s(&a["runId"]), s(&a["node"]), s(&a["approverGroup"]), s(&a["requestedBy"]), s(&a["state"]), s(&a["createdAt"]), s(&a["deadline"])])
+                .collect();
+            if rows.is_empty() {
+                eprintln!("No {state} approvals{}.", if all { "" } else { " for you" });
+            } else {
+                print_table(&["ID", "RUN", "NODE", "GROUP", "REQUESTED BY", "STATE", "CREATED", "DEADLINE"].map(String::from), &rows);
+            }
+        }
+        ApprovalCmd::Show { id } => {
+            let a: Value = ok(api.req(M::GET, &format!("{base}/{id}")).send()?)?.json()?;
+            println!("{}", serde_yaml_ng::to_string(&a)?);
+        }
+        ApprovalCmd::Approve { id, comment } => decide_approval(api, ns, &id, true, &comment)?,
+        ApprovalCmd::Reject { id, comment } => decide_approval(api, ns, &id, false, &comment)?,
+    }
+    Ok(())
+}
+
+/// Fetches the request and decides it, bound to the digest of what was fetched.
+fn decide_approval(api: &Api, ns: &str, id: &str, approve: bool, comment: &str) -> Result<()> {
+    use reqwest::Method as M;
+    let base = format!("/v1/namespaces/{ns}/approvals/{id}");
+    let a: Value = ok(api.req(M::GET, &base).send()?)?.json()?;
+    let action = if approve { "approve" } else { "reject" };
+    let body = serde_json::json!({ "digest": a["digest"], "comment": comment });
+    let d: Value = ok(api.req(M::POST, &format!("{base}/{action}")).json(&body).send()?)?.json()?;
+    println!("approval {id} ({} in run {}) {}", a["node"].as_str().unwrap_or("?"), a["runId"].as_str().unwrap_or("?"), d["state"].as_str().unwrap_or("?"));
     Ok(())
 }
 

@@ -67,8 +67,20 @@ struct Client {
 impl Client {
     /// POST with retries across daemon restarts. Returns the final (status, body).
     async fn post(&self, path: &str, body: &Value) -> (u16, Value) {
+        self.send(reqwest::Method::POST, path, Some(body)).await
+    }
+
+    async fn get(&self, path: &str) -> (u16, Value) {
+        self.send(reqwest::Method::GET, path, None).await
+    }
+
+    async fn send(&self, m: reqwest::Method, path: &str, body: Option<&Value>) -> (u16, Value) {
         loop {
-            let r = self.http.post(format!("{}{path}", self.base)).bearer_auth(TOKEN).json(body).timeout(Duration::from_secs(40)).send().await;
+            let mut r = self.http.request(m.clone(), format!("{}{path}", self.base)).bearer_auth(TOKEN).timeout(Duration::from_secs(40));
+            if let Some(b) = body {
+                r = r.json(b);
+            }
+            let r = r.send().await;
             if let Ok(r) = r {
                 let status = r.status().as_u16();
                 if status == 503 {
@@ -150,16 +162,17 @@ async fn runs_survive_repeated_kill_9() {
         }));
     }
 
-    // approver: approves each run once it is waiting
+    // approver: works the inbox, approving each run once it is waiting
     let approver = {
-        let (client, stop, ids) = (client.clone(), stop.clone(), ids.clone());
+        let (client, stop) = (client.clone(), stop.clone());
         tokio::spawn(async move {
             while !stop.load(Ordering::Relaxed) {
-                for id in &ids {
-                    let (status, _) = client
-                        .post(&format!("/v1/namespaces/{NS}/runs/{id}/signal"), &json!({"signal": "approve.review", "payload": {"approved": true}}))
-                        .await;
-                    assert!(status == 200 || status == 409, "signal -> {status}");
+                let (status, pending) = client.get(&format!("/v1/namespaces/{NS}/approvals?state=pending")).await;
+                assert_eq!(status, 200, "{pending}");
+                for a in pending.as_array().unwrap() {
+                    let path = format!("/v1/namespaces/{NS}/approvals/{}/approve", a["id"].as_str().unwrap());
+                    let (status, body) = client.post(&path, &json!({"digest": a["digest"]})).await;
+                    assert!(status == 200 || status == 409, "approve -> {status} {body}");
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }

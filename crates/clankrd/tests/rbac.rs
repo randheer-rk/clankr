@@ -234,3 +234,54 @@ async fn oidc_users_are_verified_and_bound_by_group() {
     s.owner(M::DELETE, "/v1/namespaces/ops/rolebindings/sre-approve", Value::Null).await;
     assert_eq!(s.call(&good, M::GET, "/v1/namespaces/ops/agents", None).await.0, StatusCode::FORBIDDEN);
 }
+
+/// Approval inbox over HTTP (HUM-02, E2E-12): the approver role plus the node's group decides;
+/// the run's starter can't approve it even with both; editors can't decide at all.
+#[tokio::test]
+async fn approval_inbox_enforces_role_group_and_no_self_approval() {
+    let s = start(None).await;
+    let ns = "ops";
+    let mut tokens = HashMap::new();
+    for (name, groups) in [("starter", vec!["reviewers"]), ("rev", vec!["reviewers"]), ("outsider", vec!["sales"])] {
+        s.owner(M::POST, &format!("/v1/namespaces/{ns}/serviceaccounts"), res(ns, "ServiceAccount", name, json!({"groups": groups}))).await;
+        let t = s.owner(M::POST, &format!("/v1/namespaces/{ns}/serviceaccounts/{name}/tokens"), json!({})).await;
+        tokens.insert(name, t["token"].as_str().unwrap().to_owned());
+    }
+    s.bind(ns, "starter-edit", "editor", &["serviceaccount:ops/starter"]).await;
+    s.bind(ns, "approvers", "approver", &["group:reviewers", "group:sales"]).await;
+    s.owner(M::POST, &format!("/v1/namespaces/{ns}/workflows"), res(ns, "Workflow", "deploy", json!({
+        "entrypoint": "gate", "nodes": {"gate": {"type": "approval", "approverGroup": "reviewers", "next": "go"}, "go": {"type": "agent", "agentRef": "deployer"}}}))).await;
+
+    let (st, run) = s.call(&tokens["starter"], M::POST, &format!("/v1/namespaces/{ns}/workflows/deploy/runs"), Some(json!({}))).await;
+    assert_eq!(st, StatusCode::CREATED, "{run}");
+    let inbox = |who: &'static str| {
+        let (s, t) = (&s, tokens[who].clone());
+        async move { s.call(&t, M::GET, &format!("/v1/namespaces/{ns}/approvals?state=pending&mine=true"), None).await.1.as_array().unwrap().clone() }
+    };
+    assert!(inbox("starter").await.is_empty(), "your own run isn't in your inbox");
+    assert!(inbox("outsider").await.is_empty(), "other groups don't see it as theirs");
+    let a = inbox("rev").await.pop().unwrap();
+    assert_eq!((a["requestedBy"].as_str(), a["approverGroup"].as_str()), (Some("serviceaccount:ops/starter"), Some("reviewers")));
+    let decide = |who: &'static str, digest: Value| {
+        let (s, t, id) = (&s, tokens[who].clone(), a["id"].as_str().unwrap().to_owned());
+        async move { s.call(&t, M::POST, &format!("/v1/namespaces/{ns}/approvals/{id}/approve"), Some(json!({"digest": digest, "comment": "ship it"}))).await }
+    };
+    // editor role can't decide; approver role but wrong group; approver + group but self
+    assert_eq!(decide("starter", a["digest"].clone()).await.0, StatusCode::FORBIDDEN);
+    s.bind(ns, "starter-approve", "approver", &["serviceaccount:ops/starter"]).await;
+    let (st, err) = decide("starter", a["digest"].clone()).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    assert!(err["message"].as_str().unwrap().contains("someone else"), "{err}");
+    assert_eq!(decide("outsider", a["digest"].clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(decide("rev", json!("not-the-digest")).await.0, StatusCode::CONFLICT);
+
+    let (st, done) = decide("rev", a["digest"].clone()).await;
+    assert_eq!((st, done["state"].as_str(), done["decidedBy"].as_str()), (StatusCode::OK, Some("approved"), Some("serviceaccount:ops/rev")));
+    assert_eq!(decide("rev", a["digest"].clone()).await.0, StatusCode::CONFLICT, "decided once");
+    let (_, audit) = s.call(OWNER, M::GET, "/v1/audit?limit=5000", None).await;
+    assert!(audit.as_array().unwrap().iter().any(|e| e["actor"] == "serviceaccount:ops/rev" && e["action"] == "approval approved gate"), "decision audited");
+    let id = run["runId"].as_str().unwrap();
+    let (_, h) = s.call(OWNER, M::GET, &format!("/v1/namespaces/{ns}/runs/{id}/history"), None).await;
+    let sig = h.as_array().unwrap().iter().find(|e| e["event"]["type"] == "SignalReceived").unwrap();
+    assert_eq!(sig["event"]["payload"]["by"], "serviceaccount:ops/rev", "who approved is in the run history");
+}

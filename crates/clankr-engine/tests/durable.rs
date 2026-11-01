@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use clankr_engine::{Engine, Event, RunStatus};
+use clankr_engine::{Decider, Decision, Engine, Event, RunStatus};
 use clankr_store::Store;
 use clankr_store::embedded::DevPostgres;
 use clankr_types::{ErrorCode, RequestCtx, Resource};
@@ -60,12 +60,32 @@ async fn research_run_end_to_end_with_replay_check() {
     }
     assert!(e.get(NS, id).await.unwrap().state.waits.contains_key("approve.review"));
 
-    // wrong signal is a Conflict and records nothing
+    // wrong signal is a Conflict and records nothing; approvals can't be signalled directly
     let seq_before = e.get(NS, id).await.unwrap().seq;
-    assert_eq!(e.signal(&ctx(), NS, id, "approve.nope", json!({})).await.unwrap_err().code, ErrorCode::Conflict);
+    assert_eq!(e.signal(&ctx(), NS, id, "nope", json!({})).await.unwrap_err().code, ErrorCode::Conflict);
+    assert_eq!(e.signal(&ctx(), NS, id, "approve.review", json!({"approved": true})).await.unwrap_err().code, ErrorCode::Forbidden);
     assert_eq!(e.get(NS, id).await.unwrap().seq, seq_before);
 
-    e.signal(&ctx(), NS, id, "approve.review", json!({"approved": true, "by": "ed"})).await.unwrap();
+    // the inbox: one request, bound to this run/node/visit and the data it gates
+    let pending = e.approvals(NS, Some("pending"), 10).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    let a = &pending[0];
+    assert_eq!((a.run_id, a.node.as_str(), a.visit, a.approver_group.as_str(), a.requested_by.as_deref()), (id, "review", 1, "editors", Some("owner")));
+    assert_eq!(a.subject.0["plan"]["topics"][0], "a");
+    let as_user = |actor: &str| RequestCtx { actor: actor.into(), request_id: "t".into() };
+    let (eds, others) = (vec!["editors".to_owned()], vec!["sales".to_owned()]);
+    let (ed, bob, owner) = (as_user("user:ed"), as_user("user:bob"), ctx());
+    async fn decide(e: &Engine, id: uuid::Uuid, ctx: &RequestCtx, groups: &[String], digest: &str) -> Result<clankr_engine::Approval, ErrorCode> {
+        let who = Decider { ctx, groups, break_glass: false };
+        e.decide_approval(&who, NS, id, Decision::Approve, digest, "lgtm").await.map_err(|e| e.code)
+    }
+    assert_eq!(decide(&e, a.id, &bob, &others, &a.digest).await.unwrap_err(), ErrorCode::Forbidden, "wrong group");
+    assert_eq!(decide(&e, a.id, &owner, &eds, &a.digest).await.unwrap_err(), ErrorCode::Forbidden, "no self-approval");
+    assert_eq!(decide(&e, a.id, &ed, &eds, "0000").await.unwrap_err(), ErrorCode::Conflict, "bound to the reviewed digest");
+    assert_eq!(e.get(NS, id).await.unwrap().seq, seq_before, "refusals change nothing");
+    let done = decide(&e, a.id, &ed, &eds, &a.digest).await.unwrap();
+    assert_eq!((done.state.as_str(), done.decided_by.as_deref(), done.comment.as_deref()), ("approved", Some("user:ed"), Some("lgtm")));
+    assert_eq!(decide(&e, a.id, &ed, &eds, &a.digest).await.unwrap_err(), ErrorCode::Conflict, "decided once");
     let t = e.lease(NS, "tool/publisher", "w1", TTL).await.unwrap().unwrap();
     e.complete(NS, id, &t.task, t.epoch, json!({"url": "x"})).await.unwrap();
 
@@ -237,4 +257,30 @@ async fn unsafe_task_with_lapsed_lease_waits_for_resolution() {
     assert_eq!(run.status, RunStatus::Failed);
     assert!(run.state.error.unwrap().contains("bank says no charge"));
     e.verify(NS, id).await.unwrap();
+}
+
+#[tokio::test]
+async fn approval_deadlines_reject_and_finished_runs_close_requests() {
+    const GATE: &str = "
+entrypoint: review
+nodes:
+  review: {type: approval, approverGroup: eds, timeout: 1s, next: ship, onReject: fix}
+  ship: {type: agent, agentRef: shipper}
+  fix: {type: agent, agentRef: fixer}";
+    let (_pg, _s, e) = setup(&[("gate", GATE)]).await;
+    let timed = e.start(&ctx(), NS, "gate", json!({}), None).await.unwrap().run_id;
+    let a = &e.approvals(NS, Some("pending"), 10).await.unwrap()[0];
+    assert!(a.deadline.is_some());
+    assert_eq!(e.tick().await.unwrap().approvals_expired, 0, "not due yet");
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(e.tick().await.unwrap().approvals_expired, 1);
+    assert_eq!(e.approval(NS, a.id).await.unwrap().state, "expired");
+    assert!(e.lease(NS, "agent/fixer", "w", TTL).await.unwrap().is_some(), "timeout takes the onReject path");
+    e.verify(NS, timed).await.unwrap();
+
+    let cancelled = e.start(&ctx(), NS, "gate", json!({}), None).await.unwrap().run_id;
+    e.cancel(&ctx(), NS, cancelled, "changed my mind").await.unwrap();
+    let a = e.approvals(NS, None, 10).await.unwrap().into_iter().find(|a| a.run_id == cancelled).unwrap();
+    assert_eq!(a.state, "cancelled");
+    assert_eq!(e.tick().await.unwrap().approvals_expired, 0, "closed requests never expire into a finished run");
 }

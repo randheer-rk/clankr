@@ -200,8 +200,14 @@ async fn workflow_run_over_http_with_long_poll_lease() {
     assert_eq!(r.status(), StatusCode::CONFLICT);
     assert_eq!(r.json::<Value>().await.unwrap()["code"], "StaleLease");
 
-    let r: Value = s.req(M::POST, &format!("/v1/namespaces/research/runs/{id}/signal"))
-        .json(&json!({"signal": "approve.review", "payload": {"approved": true}})).send().await.unwrap().json().await.unwrap();
+    // approvals go through the inbox, never raw signals
+    let r = s.req(M::POST, &format!("/v1/namespaces/research/runs/{id}/signal")).json(&json!({"signal": "approve.review", "payload": {"approved": true}})).send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    let pending: Vec<Value> = s.req(M::GET, "/v1/namespaces/research/approvals?state=pending").send().await.unwrap().json().await.unwrap();
+    let a = &pending[0];
+    let r = s.req(M::POST, &format!("/v1/namespaces/research/approvals/{}/approve", a["id"].as_str().unwrap())).json(&json!({"digest": a["digest"]})).send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r: Value = s.req(M::GET, &format!("/v1/namespaces/research/runs/{id}")).send().await.unwrap().json().await.unwrap();
     assert_eq!(r["status"], "Succeeded");
     let h: Vec<Value> = s.req(M::GET, &format!("/v1/namespaces/research/runs/{id}/history")).send().await.unwrap().json().await.unwrap();
     assert_eq!(h.last().unwrap()["event"]["type"], "RunCompleted");

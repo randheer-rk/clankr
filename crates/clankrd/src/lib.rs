@@ -30,6 +30,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::watch;
 
+mod approvals;
 pub mod authz;
 mod contexts;
 pub mod identity;
@@ -100,7 +101,7 @@ pub fn spawn_ticker(engine: clankr_engine::Engine) {
                 tracing::warn!(error = %e, "mailbox tick failed");
             }
             match engine.tick().await {
-                Ok(r) if r != Default::default() => tracing::info!(leases_expired = r.leases_expired, outcomes_unknown = r.outcomes_unknown, timers_fired = r.timers_fired, "tick"),
+                Ok(r) if r != Default::default() => tracing::info!(leases_expired = r.leases_expired, outcomes_unknown = r.outcomes_unknown, timers_fired = r.timers_fired, approvals_expired = r.approvals_expired, "tick"),
                 Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "tick failed"),
             }
@@ -122,6 +123,7 @@ pub fn router(state: AppState) -> Router {
         .merge(nodes::routes())
         .merge(authz::routes())
         .merge(quota::routes())
+        .merge(approvals::routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))

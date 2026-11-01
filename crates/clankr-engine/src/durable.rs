@@ -73,6 +73,7 @@ pub struct TickReport {
     pub leases_expired: u64,
     pub outcomes_unknown: usize,
     pub timers_fired: usize,
+    pub approvals_expired: u64,
 }
 
 fn err(code: ErrorCode, msg: impl Into<String>) -> ApiError {
@@ -131,8 +132,8 @@ impl Engine {
         let run_id = Uuid::new_v4();
         let mut tx = self.store.pool().begin().await.map_err(db)?;
         let ins = sqlx::query(
-            "insert into workflow_runs (run_id, namespace, workflow, workflow_generation, graph, graph_digest, status, seq, state, idempotency_key)
-             values ($1, $2, $3, $4, $5, $6, 'Running', 0, $7, $8)",
+            "insert into workflow_runs (run_id, namespace, workflow, workflow_generation, graph, graph_digest, status, seq, state, idempotency_key, started_by)
+             values ($1, $2, $3, $4, $5, $6, 'Running', 0, $7, $8, $9)",
         )
         .bind(run_id)
         .bind(ns)
@@ -142,6 +143,7 @@ impl Engine {
         .bind(&digest)
         .bind(serde_json::to_value(RunState::default()).unwrap())
         .bind(idempotency_key)
+        .bind(&ctx.actor)
         .execute(&mut *tx)
         .await;
         if let Err(e) = ins {
@@ -172,6 +174,10 @@ impl Engine {
     }
 
     pub async fn signal(&self, ctx: &RequestCtx, ns: &str, run_id: Uuid, signal: &str, payload: Value) -> Result<RunView, ApiError> {
+        if signal.starts_with(crate::run::APPROVAL_PREFIX) {
+            // approver group, self-approval and digest checks live in the approvals API
+            return Err(err(ErrorCode::Forbidden, "approvals are decided through the approvals API, not raw signals"));
+        }
         let mut tx = self.store.pool().begin().await.map_err(db)?;
         step(&mut tx, run_id, ns, Event::SignalReceived { signal: signal.into(), payload }).await?;
         audit(&mut tx, ctx, &format!("signal {signal}"), ns, run_id).await?;
@@ -456,7 +462,8 @@ impl Engine {
             }
             tx.commit().await.map_err(db)?;
         }
-        Ok(TickReport { leases_expired: expired, outcomes_unknown: unknown, timers_fired: fired })
+        let approvals_expired = self.expire_approvals().await?;
+        Ok(TickReport { leases_expired: expired, outcomes_unknown: unknown, timers_fired: fired, approvals_expired })
     }
 }
 
@@ -479,7 +486,7 @@ async fn notify_tasks(pool: &sqlx::PgPool) -> Result<(), ApiError> {
     sqlx::query("select pg_notify($1, '')").bind(TASKS_CHANNEL).execute(pool).await.map(drop).map_err(db)
 }
 
-async fn audit(tx: &mut Tx, ctx: &RequestCtx, action: &str, ns: &str, run_id: Uuid) -> Result<(), ApiError> {
+pub(crate) async fn audit(tx: &mut Tx, ctx: &RequestCtx, action: &str, ns: &str, run_id: Uuid) -> Result<(), ApiError> {
     let id = run_id.to_string();
     let target = AuditTarget { kind: "WorkflowRun", namespace: ns, name: &id, uid: Some(id.clone()) };
     audit_in_tx(tx, ctx, action, Some(target), true, None, None).await
@@ -488,8 +495,8 @@ async fn audit(tx: &mut Tx, ctx: &RequestCtx, action: &str, ns: &str, run_id: Uu
 /// One durable step: decide on `input`, append the resulting events, materialize the task and
 /// timer rows they imply, and store the folded state, all inside the caller's transaction.
 #[tracing::instrument(name = "engine.step", skip(tx, input), fields(run_id = %run_id, ns, input = input_kind(&input), events = tracing::field::Empty, status = tracing::field::Empty))]
-async fn step(tx: &mut Tx, run_id: Uuid, ns: &str, input: Event) -> Result<RunState, ApiError> {
-    let row = sqlx::query("select graph, state, seq from workflow_runs where run_id = $1 and namespace = $2 for update")
+pub(crate) async fn step(tx: &mut Tx, run_id: Uuid, ns: &str, input: Event) -> Result<RunState, ApiError> {
+    let row = sqlx::query("select graph, state, seq, started_by from workflow_runs where run_id = $1 and namespace = $2 for update")
         .bind(run_id)
         .bind(ns)
         .fetch_optional(&mut **tx)
@@ -557,7 +564,19 @@ async fn step(tx: &mut Tx, run_id: Uuid, ns: &str, input: Event) -> Result<RunSt
                     .await
                     .map_err(db)?;
             }
+            Event::WaitStarted { node, .. } => {
+                if let crate::graph::NodeKind::Approval { approver_group, timeout, .. } = &g.nodes[node].kind {
+                    let started_by: Option<String> = row.get("started_by");
+                    let deadline = timeout.as_deref().and_then(crate::graph::parse_duration).map(|d| now + chrono::Duration::from_std(d).unwrap_or_default());
+                    crate::approvals::request(tx, run_id, ns, node, state.visits[node], approver_group, started_by.as_deref(), &state.data, deadline).await?;
+                }
+            }
             Event::RunCompleted | Event::RunFailed { .. } | Event::RunCancelled { .. } => {
+                sqlx::query("update approvals set state = 'cancelled' where run_id = $1 and state = 'pending'")
+                    .bind(run_id)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(db)?;
                 sqlx::query("update tasks set state = 'cancelled', finished_at = now() where run_id = $1 and state in ('ready', 'leased', 'unknown')")
                     .bind(run_id)
                     .execute(&mut **tx)
