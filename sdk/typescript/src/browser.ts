@@ -113,7 +113,7 @@ export async function launch(opts: { args?: string[]; timeoutMs?: number } = {})
   const dir = mkdtempSync(join(tmpdir(), "clankr-chromium-"))
   const proc = spawn(CHROMIUM, [
     "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
-    "--remote-debugging-port=0", `--user-data-dir=${dir}`, ...(opts.args ?? []), "about:blank",
+    "--remote-debugging-port=0", "--remote-allow-origins=*", `--user-data-dir=${dir}`, ...(opts.args ?? []), "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"] })
   const url = await new Promise<string>((ok, err) => {
     let seen = ""

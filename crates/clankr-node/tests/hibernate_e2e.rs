@@ -37,16 +37,86 @@ fn res(kind: &str, name: &str, spec: Value) -> Resource {
     serde_json::from_value(json!({"apiVersion": "clankr.io/v1alpha1", "kind": kind, "metadata": {"name": name, "namespace": NS}, "spec": spec})).unwrap()
 }
 
+// the same agent on the TypeScript SDK
+const TS_AGENT: &str = r#"
+import { AgentApp } from "SDK/src/index.ts"
+const app = new AgentApp()
+let done = 0
+app.task("*", async () => ({ restored: app.checkpoint, version: app.checkpointVersion, done: ++done }))
+app.onHibernate(async () => ({ done }))
+app.run()
+"#;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn hibernate_checkpoints_releases_and_resumes() {
-    let cp = common::start("owner", "join", Some(Duration::from_millis(200))).await;
-    let s = cp.store.clone();
     let tmp = tempfile::tempdir().unwrap();
     let sdk: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdk/python").canonicalize().unwrap();
     std::fs::write(tmp.path().join("agent.py"), AGENT).unwrap();
-    s.create(&ctx(), res("Agent", "a", json!({"runtime": {"type": "process", "command": ["python3", tmp.path().join("agent.py")], "env": {"PYTHONPATH": sdk}}, "resources": {"memoryMiB": 64, "cpus": 0.1}})))
-        .await
-        .unwrap();
+    roundtrip(json!({"type": "process", "command": ["python3", tmp.path().join("agent.py")], "env": {"PYTHONPATH": sdk}}), tmp).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hibernation_works_with_the_typescript_sdk() {
+    if !std::process::Command::new("node").arg("--version").output().is_ok_and(|o| o.status.success()) {
+        eprintln!("SKIPPED: node not installed");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let sdk: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdk/typescript").canonicalize().unwrap();
+    std::fs::write(tmp.path().join("agent.ts"), TS_AGENT.replace("SDK", sdk.to_str().unwrap())).unwrap();
+    roundtrip(json!({"type": "process", "command": ["node", tmp.path().join("agent.ts")]}), tmp).await;
+}
+
+// and on the Go SDK
+const GO_AGENT: &str = r#"
+package main
+
+import (
+	"context"
+	"encoding/json"
+
+	clankr "clankr.dev/sdk"
+)
+
+func main() {
+	app := clankr.New()
+	done := 0
+	app.Task("*", func(ctx context.Context, t *clankr.Task, c *clankr.Client) (any, error) {
+		done++
+		var restored any
+		var version any
+		if app.Checkpoint != nil {
+			_ = json.Unmarshal(app.Checkpoint, &restored)
+			version = app.CheckpointVersion
+		}
+		return map[string]any{"restored": restored, "version": version, "done": done}, nil
+	})
+	app.OnHibernate(func(ctx context.Context, c *clankr.Client) (any, error) { return map[string]any{"done": done}, nil })
+	app.Run()
+}
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hibernation_works_with_the_go_sdk() {
+    if !std::process::Command::new("go").arg("version").output().is_ok_and(|o| o.status.success()) {
+        eprintln!("SKIPPED: go not installed");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let sdk: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdk/go").canonicalize().unwrap();
+    let dir = tmp.path().join("goagent");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("main.go"), GO_AGENT).unwrap();
+    std::fs::write(dir.join("go.mod"), format!("module agent\n\ngo 1.24\n\nrequire clankr.dev/sdk v0.0.0\n\nreplace clankr.dev/sdk => {}\n", sdk.display())).unwrap();
+    let out = std::process::Command::new("go").args(["build", "-o", "agent", "."]).current_dir(&dir).env("GOFLAGS", "-mod=mod").env("GOPROXY", "off").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    roundtrip(json!({"type": "process", "command": [dir.join("agent")]}), tmp).await;
+}
+
+async fn roundtrip(runtime: Value, tmp: tempfile::TempDir) {
+    let cp = common::start("owner", "join", Some(Duration::from_millis(200))).await;
+    let s = cp.store.clone();
+    s.create(&ctx(), res("Agent", "a", json!({"runtime": runtime, "resources": {"memoryMiB": 64, "cpus": 0.1}}))).await.unwrap();
     s.create(&ctx(), res("AgentDeployment", "a", json!({"agent": "a", "replicas": 1, "rollout": {"minReadySeconds": 0}}))).await.unwrap();
     s.create(&ctx(), res("Workflow", "job", json!({"entrypoint": "w", "nodes": {"w": {"type": "agent", "agentRef": "a"}}}))).await.unwrap();
 
