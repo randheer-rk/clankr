@@ -28,6 +28,22 @@ app.run()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sandbox_tools_run_on_the_agents_node() {
+    run("container").await;
+}
+
+/// The same tool in a Firecracker microVM: the request reaches it on stdin over vsock.
+#[tokio::test(flavor = "multi_thread")]
+async fn sandbox_tools_run_in_a_microvm_too() {
+    let kernel = std::env::var_os("KENNEL_VM_KERNEL").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/kennel-vmlinuz"))).filter(|k| k.is_file());
+    let Some(kernel) = kernel else {
+        eprintln!("SKIPPED: no guest kernel (KENNEL_VM_KERNEL or ~/.local/share/kennel-vmlinuz)");
+        return;
+    };
+    unsafe { std::env::set_var("KENNEL_VM_KERNEL", kernel) };
+    run("microvm").await;
+}
+
+async fn run(class: &str) {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
     let kbin = std::env::var_os("KENNEL").map(PathBuf::from).unwrap_or_else(|| repo.join("../kennel/target/debug/kennel"));
     let kroot = repo.join("target/kennel-test-store");
@@ -54,7 +70,7 @@ async fn sandbox_tools_run_on_the_agents_node() {
     let res = |kind: &str, name: &str, spec: Value| serde_json::from_value::<Resource>(json!({"apiVersion": "clankr.io/v1alpha1", "kind": kind, "metadata": {"name": name, "namespace": NS}, "spec": spec})).unwrap();
     let script = r#"read -r req; n=$(echo "$req" | sed 's/.*"n":\([0-9]*\).*/\1/'); echo "{\"double\": $((n * 2)), \"kernel\": \"$(uname -s)\"}""#;
     for r in [
-        res("Tool", "sh", json!({"version": "1", "timeoutSeconds": 20, "executor": {"type": "sandbox", "container": {"image": format!("docker.io/library/busybox@{digest}"), "command": ["sh", "-c", script]}},
+        res("Tool", "sh", json!({"version": "1", "timeoutSeconds": 20, "executor": {"type": "sandbox", "container": {"image": format!("docker.io/library/busybox@{digest}"), "command": ["sh", "-c", script], "runtime": class}},
             "methods": {"run": {"sideEffects": "idempotent"}}})),
         res("ToolClaim", "t", json!({"allow": [{"tool": "sh"}]})),
         res("Agent", "a", json!({"runtime": {"type": "process", "command": ["python3", tmp.path().join("agent.py")], "env": {"PYTHONPATH": sdk}}, "tools": ["t"], "taskTtlSeconds": 30})),

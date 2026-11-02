@@ -185,9 +185,7 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
                 .args(["-e", &format!("CLANKR_AGENT={}", cfg.agent)])
                 .args(["-e", &format!("CLANKR_NAMESPACE={}", cfg.namespace)]);
             if vm {
-                if !volumes.is_empty() {
-                    bail!("refusing to launch: the microvm runtime doesn't support volumes yet");
-                }
+                // volumes go to kennel as -v below; in a VM each is a persistent ext4 disk
                 c.arg("--socket").arg(format!("{sock_dir}/agent.sock={}", sock.display()));
                 if egress.is_some() {
                     c.arg("--socket").arg(format!("{sock_dir}/egress.sock={}", dir.join("egress.sock").display()));
