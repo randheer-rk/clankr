@@ -34,6 +34,7 @@ mod approvals;
 pub mod authz;
 pub mod backup;
 mod contexts;
+mod federation;
 pub mod identity;
 mod images;
 pub mod telemetry;
@@ -121,6 +122,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/namespaces/{ns}/{plural}/{name}/status", put(update_status))
         .merge(runs::routes())
         .merge(contexts::routes())
+        .merge(federation::routes())
         .merge(models::routes())
         .merge(mailboxes::routes())
         .merge(nodes::routes())
@@ -342,6 +344,8 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "ImagePolicy" => clankr_types::agent::admit_image_policy(&r.spec).map(drop),
         "Tool" => clankr_gateway::tools::admit_tool(&r.spec).map(drop),
         "ToolClaim" => clankr_gateway::tools::admit_tool_claim(&r.spec).map(drop),
+        "Cluster" => clankr_types::federation::admit_cluster(&r.spec).map(drop),
+        "PlacementPolicy" => clankr_types::federation::admit_placement_policy(&r.spec).map(drop),
         "RoleBinding" => clankr_types::rbac::admit_role_binding(&r.spec).map(drop),
         "ServiceAccount" => clankr_types::rbac::admit_service_account(&r.spec).map(drop),
         "ResourceQuota" => clankr_types::quota::admit_resource_quota(&r.spec).map(drop),

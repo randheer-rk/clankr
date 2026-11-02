@@ -77,6 +77,8 @@ struct StartBody {
     #[serde(default)]
     input: Value,
     idempotency_key: Option<String>,
+    /// Run it on this remote Cluster instead (multi-cluster placement).
+    cluster: Option<String>,
 }
 
 async fn start(
@@ -85,17 +87,20 @@ async fn start(
     Path((ns, name)): Path<(String, String)>,
     headers: HeaderMap,
     Json(b): Json<StartBody>,
-) -> ApiResult<(StatusCode, Json<RunView>)> {
+) -> ApiResult<(StatusCode, Json<Value>)> {
     let key = b.idempotency_key.or_else(|| headers.get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned));
+    if let Some(cluster) = &b.cluster {
+        return Ok((StatusCode::CREATED, Json(crate::federation::start_remote(&s, &ctx, &ns, &name, cluster, b.input, key).await?)));
+    }
     // a retried start returns its run even when the namespace is now at its activeRuns limit
     if let Some(k) = &key
         && let Some(run) = s.engine.by_idempotency_key(&ns, k).await?
     {
-        return Ok((StatusCode::CREATED, Json(run)));
+        return Ok((StatusCode::CREATED, Json(serde_json::to_value(run).expect("serializable"))));
     }
     let _quota = crate::quota::admit_run(&s.store, &ns).await?;
     let run = s.engine.start(&ctx, &ns, &name, b.input, key.as_deref()).await?;
-    Ok((StatusCode::CREATED, Json(run)))
+    Ok((StatusCode::CREATED, Json(serde_json::to_value(run).expect("serializable"))))
 }
 
 #[derive(Deserialize)]

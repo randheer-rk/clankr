@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod agent;
+pub mod federation;
 pub mod protocol;
 pub mod quota;
 pub mod rbac;
@@ -149,7 +150,7 @@ pub const KINDS: &[&str] = &[
     "SecretClaim", "AgentSecret", "AgentConfig", "AgentPolicy", "AgentBudget", "ResourceQuota",
     "PriorityClass", "Node", "AgentImage", "AgentBuild", "BuilderPool", "ImageRegistry", "BuildPolicy",
     "ImagePolicy", "SkillBundle", "ProviderConnection", "AgentRuntimeClass", "SecurityPolicy",
-    "NetworkPolicy", "ToolPolicy", "RoleBinding", "ServiceAccount",
+    "NetworkPolicy", "ToolPolicy", "RoleBinding", "ServiceAccount", "Cluster", "PlacementPolicy",
 ];
 
 /// URL path segment for a kind: `AgentPolicy` -> `agentpolicies`, `AgentMailbox` -> `agentmailboxes`.

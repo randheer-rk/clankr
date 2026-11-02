@@ -1,0 +1,19 @@
+# Clankr browser agent base image: Node 24 + headless Chromium + the TypeScript SDK and its
+# CDP helper (`@clankr/sdk/browser`).
+# Build: kennel build -f Kennelfile.browser -t clankr/agent-browser:0.1 sdk/typescript
+# The apt layer follows Debian's current packages: rebuild to pick up Chromium security fixes
+# (the build records the resolved version in /opt/clankr/chromium-version).
+FROM docker.io/library/node@sha256:a43f7fc3e52e87d12a905f46eea0275def84ca8f2981a5b53fed44d7fb398ee0
+RUN --network=host apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chromium fonts-liberation ca-certificates && rm -rf /var/lib/apt/lists/* && mkdir -p /opt/clankr && chromium --version > /opt/clankr/chromium-version
+COPY package.json /opt/clankr/typescript/package.json
+COPY src/ /opt/clankr/typescript/src/
+RUN mkdir -p /node_modules/@clankr && ln -s /opt/clankr/typescript /node_modules/@clankr/sdk
+ENV NODE_ENV=production
+ENV CLANKR_CHROMIUM=/usr/bin/chromium
+LABEL org.clankr.sdk=typescript/0.1.0
+LABEL org.clankr.browser=chromium
+USER 65534:65534
+# smoke test: Chromium renders a page and the CDP helper reads it back, inside the sandbox
+RUN cd / && HOME=/tmp node -e "import('@clankr/sdk/browser').then(async ({ launch }) => { const b = await launch(); const p = await b.newPage(); await p.goto('data:text/html,<title>clankr</title><p>ok</p>'); const t = await p.evaluate('document.title + \":\" + document.body.innerText'); await b.close(); if (t !== 'clankr:ok') throw new Error(t); console.log('chromium smoke ok') })"
+AGENT_ENTRYPOINT ["node", "-e", "console.error('clankr/agent-browser is a base image: set AGENT_ENTRYPOINT in your agent Kennelfile'); process.exit(1)"]
+REQUIRE_RUNTIME_ABI v1

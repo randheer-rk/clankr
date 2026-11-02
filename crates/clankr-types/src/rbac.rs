@@ -159,6 +159,7 @@ pub fn required(method: &str, path: &str) -> Option<(Option<String>, Perm)> {
         // recorded prompts and responses can hold anything an agent saw: secret-level access
         ["v1", "namespaces", n, "runs", _, "traces"] => (ns(n), SecretsRead),
         ["v1", "namespaces", n, "workflows", _, "runs"] | ["v1", "namespaces", n, "runs", ..] => (ns(n), if read { RunsRead } else { RunsWrite }),
+        ["v1", "namespaces", n, "remoteruns", ..] => (ns(n), if read { RunsRead } else { RunsWrite }),
         ["v1", "namespaces", n, "approvals", ..] => (ns(n), if read { RunsRead } else { ApprovalsDecide }),
         ["v1", "namespaces", n, "tasks" | "models", ..] => (ns(n), WorkExecute),
         ["v1", "namespaces", n, "instances", _, "checkpoint"] => (ns(n), WorkExecute),

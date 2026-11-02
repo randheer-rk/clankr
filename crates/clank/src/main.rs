@@ -320,8 +320,16 @@ enum RunCmd {
         input: String,
         #[arg(long)]
         idempotency_key: Option<String>,
+        /// Run it on this remote Cluster (residency and secret rules apply).
+        #[arg(long)]
+        cluster: Option<String>,
     },
     Get { id: String },
+    /// Runs started on remote clusters from here (`--id` fetches one's live status).
+    Remote {
+        #[arg(long)]
+        id: Option<String>,
+    },
     List {
         #[arg(long)]
         workflow: Option<String>,
@@ -760,15 +768,28 @@ fn run_cmd(api: &Api, ns: &str, cmd: RunCmd) -> Result<()> {
     use reqwest::Method as M;
     let runs = format!("/v1/namespaces/{ns}/runs");
     match cmd {
-        RunCmd::Start { workflow, input, idempotency_key } => {
+        RunCmd::Start { workflow, input, idempotency_key, cluster } => {
             let mut body = serde_json::json!({ "input": json_arg(&input)? });
             if let Some(k) = idempotency_key {
                 body["idempotencyKey"] = k.into();
+            }
+            if let Some(c) = &cluster {
+                body["cluster"] = c.clone().into();
             }
             let r: Value = ok(api.req(M::POST, &format!("/v1/namespaces/{ns}/workflows/{workflow}/runs")).json(&body).send()?)?.json()?;
             run_summary(&r);
         }
         RunCmd::Get { id } => run_summary(&ok(api.req(M::GET, &format!("{runs}/{id}")).send()?)?.json()?),
+        RunCmd::Remote { id: Some(id) } => {
+            let r: Value = ok(api.req(M::GET, &format!("/v1/namespaces/{ns}/remoteruns/{id}")).send()?)?.json()?;
+            println!("on cluster {} ({})", r["cluster"]["name"].as_str().unwrap_or("?"), r["cluster"]["region"].as_str().unwrap_or("?"));
+            run_summary(&r);
+        }
+        RunCmd::Remote { id: None } => {
+            let l: Vec<Value> = ok(api.req(M::GET, &format!("/v1/namespaces/{ns}/remoteruns")).send()?)?.json()?;
+            let rows: Vec<Vec<String>> = l.iter().map(|r| ["runId", "workflow", "cluster", "region", "status", "createdAt"].iter().map(|k| r[*k].as_str().unwrap_or("").to_owned()).collect()).collect();
+            print_table(&["RUN", "WORKFLOW", "CLUSTER", "REGION", "STATUS", "STARTED"].map(String::from), &rows);
+        }
         RunCmd::List { workflow } => {
             let path = match workflow {
                 Some(w) => format!("/v1/namespaces/{ns}/workflows/{w}/runs"),

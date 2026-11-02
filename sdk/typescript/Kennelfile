@@ -1,0 +1,17 @@
+# Clankr Node.js agent base image: Node 24 + the Clankr TypeScript SDK (ABI v1.1).
+# Build: kennel build -t clankr/agent-node:0.1 sdk/typescript
+# Agents derive from it by digest, `import { AgentApp } from "@clankr/sdk"`, and set their own
+# AGENT_ENTRYPOINT (node runs .ts directly).
+FROM docker.io/library/node@sha256:a43f7fc3e52e87d12a905f46eea0275def84ca8f2981a5b53fed44d7fb398ee0
+COPY package.json /opt/clankr/typescript/package.json
+COPY src/ /opt/clankr/typescript/src/
+# bare `@clankr/sdk` resolves from any directory via /node_modules (ESM ignores NODE_PATH)
+RUN mkdir -p /node_modules/@clankr && ln -s /opt/clankr/typescript /node_modules/@clankr/sdk
+ENV NODE_ENV=production
+LABEL org.clankr.sdk=typescript/0.1.0
+# agents run as nobody; image files stay root-owned and read-only to them (CL-32-01)
+USER 65534:65534
+# smoke test: the SDK loads in the sandbox (CL-24-05)
+RUN cd / && node -e "import('@clankr/sdk').then(m => console.log('clankr sdk', m.VERSION, 'abi', m.ABI_MAJOR + '.' + m.ABI_MINOR))"
+AGENT_ENTRYPOINT ["node", "-e", "console.error('clankr/agent-node is a base image: set AGENT_ENTRYPOINT in your agent Kennelfile'); process.exit(1)"]
+REQUIRE_RUNTIME_ABI v1
