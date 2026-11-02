@@ -144,6 +144,8 @@ struct Bucket {
     cost: bool,
     /// Human name for errors.
     what: String,
+    /// AgentBudget buckets: (budget name, alert thresholds, webhook).
+    alerts: Option<(String, Vec<u32>, Option<String>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -384,7 +386,7 @@ impl Gateway {
         let mut out = vec![];
         let mut add = |key: String, scope: String, max: Option<i64>, cost: bool, what: String| {
             if let Some(max) = max {
-                out.push(Bucket { key, scope, max, cost, what });
+                out.push(Bucket { key, scope, max, cost, what, alerts: None });
             }
         };
         let usd = |v: Option<f64>| v.map(clankr_types::quota::micro_usd);
@@ -395,11 +397,18 @@ impl Gateway {
             add(format!("cost:{claim}"), run.to_string(), usd(b.max_cost_usd_per_run), true, format!("ModelClaim {claim}: per-run cost budget (run {run})"));
         }
         let now = chrono::Utc::now();
+        let mut tags = vec![];
         for r in self.store.list("AgentBudget", Some(ns), &Default::default()).await?.0 {
             let spec = clankr_types::quota::admit_agent_budget(&r.spec)?;
             let (name, window) = (&r.metadata.name, spec.period.window(now));
             add(format!("budget:{name}"), window.clone(), spec.max_tokens, false, format!("AgentBudget {name}: token budget for {window}"));
             add(format!("budget-cost:{name}"), window.clone(), usd(spec.max_cost_usd), true, format!("AgentBudget {name}: cost budget for {window}"));
+            tags.push((name.clone(), spec.alerts.clone(), spec.webhook.clone()));
+        }
+        for (name, alerts, webhook) in tags {
+            for b in out.iter_mut().filter(|b| b.key == format!("budget:{name}") || b.key == format!("budget-cost:{name}")) {
+                b.alerts = Some((name.clone(), alerts.clone(), webhook.clone()));
+            }
         }
         out.sort_by(|a, b| (&a.key, &a.scope).cmp(&(&b.key, &b.scope)));
         Ok(out)
@@ -445,18 +454,60 @@ impl Gateway {
     /// Releases reservations and charges actual usage: `(reserved, used)` for tokens and cost.
     async fn settle(&self, buckets: &[Bucket], ns: &str, tokens: (i64, i64), cost: (i64, i64)) -> Result<(), ApiError> {
         let mut tx = self.store.pool().begin().await.map_err(clankr_store::db)?;
+        let mut fired = vec![];
         for b in buckets {
             let (reserved, used) = if b.cost { cost } else { tokens };
-            sqlx::query("update model_usage set reserved = reserved - $4, used = used + $5 where namespace = $1 and claim = $2 and scope = $3")
+            let total: i64 = sqlx::query_scalar("update model_usage set reserved = reserved - $4, used = used + $5 where namespace = $1 and claim = $2 and scope = $3 returning used")
                 .bind(ns)
                 .bind(&b.key)
                 .bind(&b.scope)
                 .bind(reserved)
                 .bind(used)
-                .execute(&mut *tx)
+                .fetch_one(&mut *tx)
                 .await
                 .map_err(clankr_store::db)?;
+            // budget alerts: each crossed threshold fires once per window (the unique key dedups)
+            let Some((budget, thresholds, webhook)) = &b.alerts else { continue };
+            let pct = if b.max > 0 { total as f64 * 100.0 / b.max as f64 } else { f64::INFINITY };
+            let scale = if b.cost { 1e6 } else { 1.0 };
+            for t in thresholds.iter().filter(|t| pct >= **t as f64) {
+                let metric = if b.cost { "costUSD" } else { "tokens" };
+                let new: Option<i64> = sqlx::query_scalar(
+                    "insert into budget_alerts (namespace, budget, window_key, metric, threshold, used, limit_value) values ($1, $2, $3, $4, $5, $6, $7)
+                     on conflict do nothing returning id",
+                )
+                .bind(ns)
+                .bind(budget)
+                .bind(&b.scope)
+                .bind(metric)
+                .bind(*t as i32)
+                .bind(total as f64 / scale)
+                .bind(b.max as f64 / scale)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(clankr_store::db)?;
+                if new.is_some() {
+                    let ctx = RequestCtx { actor: "system:budgets".into(), request_id: Uuid::new_v4().to_string() };
+                    let target = clankr_store::AuditTarget { kind: "AgentBudget", namespace: ns, name: budget, uid: None };
+                    let action = format!("budget alert {metric} {t}% ({})", b.scope);
+                    clankr_store::audit_in_tx(&mut tx, &ctx, &action, Some(target), true, None, None).await?;
+                    tracing::warn!(namespace = ns, budget = %budget, window = %b.scope, metric, threshold = t, "budget alert");
+                    if let Some(url) = webhook {
+                        fired.push((url.clone(), serde_json::json!({"namespace": ns, "budget": budget, "window": b.scope, "metric": metric, "threshold": t, "used": total as f64 / scale, "limit": b.max as f64 / scale})));
+                    }
+                }
+            }
         }
-        tx.commit().await.map_err(clankr_store::db)
+        tx.commit().await.map_err(clankr_store::db)?;
+        // ponytail: best-effort webhook, no retry queue; the alert row and audit entry are the record
+        for (url, body) in fired {
+            let http = self.http.clone();
+            tokio::spawn(async move {
+                if let Err(e) = http.post(&url).timeout(Duration::from_secs(10)).json(&body).send().await {
+                    tracing::warn!(error = %e.without_url(), "budget alert webhook failed");
+                }
+            });
+        }
+        Ok(())
     }
 }

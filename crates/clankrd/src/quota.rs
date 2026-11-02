@@ -183,5 +183,13 @@ async fn usage(State(s): State<AppState>, Path(ns): Path<String>) -> ApiResult<J
     .await
     .map_err(clankr_store::db)?;
     let by_day: Vec<Value> = days.into_iter().map(|(d, t, c)| json!({"day": d, "tokens": t, "costUSD": c.map(|c| c as f64 / 1e6)})).collect();
-    Ok(Json(json!({"namespace": ns, "quotas": quotas, "budgets": budgets, "modelSpendThisMonth": claims, "spendByDay": by_day})))
+    let alerts: Value = sqlx::query_scalar(
+        "select coalesce(jsonb_agg(jsonb_build_object('at', at, 'budget', budget, 'window', window_key, 'metric', metric, 'threshold', threshold,
+             'used', used, 'limit', limit_value) order by at desc), '[]') from (select * from budget_alerts where namespace = $1 order by at desc limit 20) a",
+    )
+    .bind(&ns)
+    .fetch_one(s.store.pool())
+    .await
+    .map_err(clankr_store::db)?;
+    Ok(Json(json!({"namespace": ns, "quotas": quotas, "budgets": budgets, "modelSpendThisMonth": claims, "spendByDay": by_day, "alerts": alerts})))
 }

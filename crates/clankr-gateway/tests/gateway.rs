@@ -269,3 +269,39 @@ async fn record_then_replay() {
     let replayed: i64 = sqlx::query_scalar("select count(*) from model_traces where connection = 'golden'").fetch_one(s.pool()).await.unwrap();
     assert_eq!(replayed, 0, "replays are not re-recorded");
 }
+
+/// Budget alerts (§34.9): each threshold fires once per window, is audited, and reaches the webhook.
+#[tokio::test]
+async fn budget_alerts_fire_once_per_threshold() {
+    let (_pg, s, gw) = setup().await;
+    let reply = json!({"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 290}});
+    let (url, _) = fake("/chat/completions", StatusCode::OK, reply).await;
+    let hooks = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let h = hooks.clone();
+    let app = axum::Router::new().route("/hook", post(move |Json(b): Json<Value>| {
+        let h = h.clone();
+        async move { h.lock().unwrap().push(b); StatusCode::NO_CONTENT }
+    }));
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let hook = format!("http://127.0.0.1:{}/hook", l.local_addr().unwrap().port());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    for r in [
+        res("ProviderConnection", "p", json!({"provider": "openai-compatible", "endpoint": url, "secretRef": {"name": "llm", "key": "apiKey"}, "allowedModels": ["m"]})),
+        res("ModelClaim", "c", json!({"providerConnection": "p", "model": "m"})),
+        res("AgentBudget", "daily", json!({"period": "day", "maxTokens": 1200, "alerts": [50, 100], "webhook": hook})),
+    ] {
+        s.create(&ctx(), r).await.unwrap();
+    }
+    for _ in 0..4 {
+        gw.generate(&ctx(), NS, "c", ask("hi")).await.unwrap(); // 300 tokens each: 25%, 50%, 75%, 100%
+    }
+    assert_eq!(gw.generate(&ctx(), NS, "c", ask("hi")).await.unwrap_err().code, ErrorCode::QuotaExceeded);
+    let alerts: Vec<(i32, f64)> = sqlx::query_as("select threshold, used from budget_alerts order by threshold").fetch_all(s.pool()).await.unwrap();
+    assert_eq!(alerts, [(50, 600.0), (100, 1200.0)], "each threshold once, when crossed");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let got = hooks.lock().unwrap().clone();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!((got[0]["budget"].as_str(), got[0]["metric"].as_str(), got[0]["limit"].as_f64()), (Some("daily"), Some("tokens"), Some(1200.0)));
+    let audit = s.audit_since(0, 1000).await.unwrap();
+    assert_eq!(audit.iter().filter(|e| e.action.starts_with("budget alert tokens")).count(), 2);
+}

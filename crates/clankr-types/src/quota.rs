@@ -66,12 +66,30 @@ pub struct AgentBudgetSpec {
     /// Needs `pricing` for the model on its ProviderConnection; unpriced calls are refused.
     #[serde(default, rename = "maxCostUSD", skip_serializing_if = "Option::is_none")]
     pub max_cost_usd: Option<f64>,
+    /// Percent-of-limit thresholds that raise an alert once per window (default 80 and 100).
+    #[serde(default = "default_alerts")]
+    pub alerts: Vec<u32>,
+    /// POSTed `{namespace, budget, window, metric, threshold, used, limit}` when an alert fires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook: Option<String>,
+}
+
+fn default_alerts() -> Vec<u32> {
+    vec![80, 100]
 }
 
 pub fn admit_agent_budget(spec: &serde_json::Value) -> Result<AgentBudgetSpec, ApiError> {
     let s: AgentBudgetSpec = serde_json::from_value(spec.clone()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, format!("agent budget: {e}")).field("spec"))?;
     if s.max_tokens.is_none() && s.max_cost_usd.is_none() {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "set maxTokens and/or maxCostUSD").field("spec"));
+    }
+    if s.alerts.iter().any(|a| *a == 0 || *a > 1000) {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "alert thresholds are percents in 1..=1000").field("spec.alerts"));
+    }
+    if let Some(w) = &s.webhook
+        && !(w.starts_with("https://") || w.starts_with("http://127.0.0.1") || w.starts_with("http://localhost"))
+    {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "webhook must be https (http only for localhost)").field("spec.webhook"));
     }
     if s.max_tokens.is_some_and(|t| t < 0) || s.max_cost_usd.is_some_and(|c| !c.is_finite() || c < 0.0) {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "limits must be non-negative").field("spec"));
