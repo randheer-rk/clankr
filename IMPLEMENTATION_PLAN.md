@@ -210,4 +210,6 @@ M4 (operations beta):
 - [x] Web UI (ADR 0014): "Vision" design signed off after 4 mockup rounds; Vite/React app in `ui/` embedded in clankrd; inbox, runs (live flow graph, activity, history, data, cost, cancel), agents, workflows (start run), budgets (spend chart + forecast, caps, quotas, spend by claim); token sign-in
 - [x] Backup/restore (docs/runbooks/backup-restore.md): `clankrd backup|restore|verify`; snapshot-consistent pg_dump + manifest (revision, audit head, row counts, dump checksum, key fingerprint); keys escrowed separately by default; restore refuses wrong key / damaged dump / non-empty target / newer schema, then verifies audit chain, secrets, run replay; CA cert without key refuses to start; drill test incl. concurrent writers and tamper detection
 - [x] Eval harness (ADR 0015): golden engine fixtures (7 scenarios, exact histories, UPDATE_GOLDEN=1); opt-in model call recording + `replay` provider (prompt-hash matched, unscripted prompt = error); `clank eval run` with assertions, status expectations, pass-rate/cost/p95 thresholds and baseline regression gate (exit 1); `clank eval trace` exports a replay script
-- [ ] Image promotion by digest
+- [x] Image promotion (ADR 0016): AgentImage stages, digest-only, no stage skipping, eval-evidence gates, admin-only ImagesPromote, rollback, history + audit; Agents `track` a stage and are rewritten on promotion; scheduler restarts instances when their Agent generation changes (fixes spec rollout); `clank image promote|rollback|history --eval-report`
+
+**M4 complete.**

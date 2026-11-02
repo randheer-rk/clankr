@@ -85,6 +85,8 @@ pub struct Report {
     pub moved: usize,
     pub removed: usize,
     pub pending: usize,
+    /// Instances restarted in place because their Agent changed.
+    pub restarted: usize,
 }
 
 fn suffix() -> String {
@@ -103,7 +105,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
             Ok(s) => s,
             Err(_) => continue,
         };
-        let agent = match store.get(ns, "Agent", &spec.agent).await.and_then(|a| admit_agent(&a.spec)) {
+        let (agent, generation) = match store.get(ns, "Agent", &spec.agent).await.and_then(|a| Ok((admit_agent(&a.spec)?, a.metadata.generation))) {
             Ok(a) => a,
             Err(e) => {
                 set_status(store, d, 0, spec.replicas as usize, &format!("agent {}: {}", spec.agent, e.message)).await;
@@ -117,7 +119,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
             selector: spec.node_selector.clone(),
             claims: agent.volumes.iter().map(|v| v.claim.clone()).collect(),
         };
-        wanted.insert((ns.clone(), d.metadata.name.clone()), (spec, req, d.clone()));
+        wanted.insert((ns.clone(), d.metadata.name.clone()), (spec, req, d.clone(), generation));
     }
 
     let mut tx = store.pool().begin().await.map_err(clankr_store::db)?;
@@ -131,7 +133,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         .fetch_all(&mut *tx)
         .await
         .map_err(clankr_store::db)?;
-    let instances: Vec<Instance> = sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note from instances order by id for update")
+    let instances: Vec<Instance> = sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation from instances order by id for update")
         .fetch_all(&mut *tx)
         .await
         .map_err(clankr_store::db)?;
@@ -190,7 +192,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
     }
 
     let mut statuses = vec![];
-    for (key, (spec, req, res)) in &wanted {
+    for (key, (spec, req, res, generation)) in &wanted {
         let ns = &key.0;
         let mut list = by_dep.get(key).cloned().unwrap_or_default();
         list.sort_by_key(|i| (keep(i, &bindings), i.id.clone()));
@@ -214,15 +216,32 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                     format!("drain blocked: local volume {ns}/{c} lives on {n}; data doesn't move between nodes")
                 });
                 set_note(&mut tx, i, note.as_deref()).await?;
+                if i.agent_generation != *generation {
+                    // the Agent changed (new image, env, limits): restart in place on the new spec;
+                    // the epoch bump fences the old process like any move
+                    // ponytail: every replica restarts at once; add maxUnavailable when that hurts
+                    sqlx::query("update instances set epoch = epoch + 1, agent_generation = $2, memory_mib = $3, cpus = $4, updated_at = now() where id = $1")
+                        .bind(&i.id)
+                        .bind(generation)
+                        .bind(req.memory_mib as i64)
+                        .bind(req.cpus)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(clankr_store::db)?;
+                    report.restarted += 1;
+                }
                 continue;
             }
             match try_place(req, ns, &i.id, &bindings, &in_use, &cands) {
                 Ok(node) => {
                     assign(&mut cands, &node, req);
                     bind(&mut tx, &mut bindings, &mut in_use, ns, req, &node, &i.id).await?;
-                    sqlx::query("update instances set node = $2, epoch = epoch + 1, note = null, updated_at = now() where id = $1")
+                    sqlx::query("update instances set node = $2, epoch = epoch + 1, note = null, agent_generation = $3, memory_mib = $4, cpus = $5, updated_at = now() where id = $1")
                         .bind(&i.id)
                         .bind(&node)
+                        .bind(generation)
+                        .bind(req.memory_mib as i64)
+                        .bind(req.cpus)
                         .execute(&mut *tx)
                         .await
                         .map_err(clankr_store::db)?;
@@ -254,7 +273,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                     None
                 }
             };
-            sqlx::query("insert into instances (id, namespace, deployment, agent, node, memory_mib, cpus, note) values ($1, $2, $3, $4, $5, $6, $7, $8)")
+            sqlx::query("insert into instances (id, namespace, deployment, agent, node, memory_mib, cpus, note, agent_generation) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
                 .bind(&id)
                 .bind(ns)
                 .bind(&key.1)
@@ -263,6 +282,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                 .bind(req.memory_mib as i64)
                 .bind(req.cpus)
                 .bind(node.is_none().then_some(&reason))
+                .bind(generation)
                 .execute(&mut *tx)
                 .await
                 .map_err(clankr_store::db)?;
@@ -385,7 +405,7 @@ pub fn spawn(store: Store, holder: String, every: Duration) -> tokio::task::Join
                 }
             };
             match reconcile(&store, &lead).await {
-                Ok(r) if r != Report::default() && (r.created + r.moved + r.removed) > 0 => tracing::info!(?r, epoch = lead.epoch, "scheduled"),
+                Ok(r) if r != Report::default() && (r.created + r.moved + r.removed + r.restarted) > 0 => tracing::info!(?r, epoch = lead.epoch, "scheduled"),
                 Ok(_) => {}
                 Err(e) if e.code == ErrorCode::StaleLease => tracing::warn!(error = %e, "lost leadership mid-pass"),
                 Err(e) => tracing::warn!(error = %e, "reconcile failed"),

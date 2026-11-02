@@ -90,6 +90,13 @@ enum Cmd {
     },
     /// Who the server thinks you are.
     Whoami,
+    /// Promote image digests through an AgentImage's stages, roll back, show history.
+    Image {
+        #[arg(short, long, default_value = "default", global = true)]
+        namespace: String,
+        #[command(subcommand)]
+        cmd: ImageCmd,
+    },
     /// Evaluate a workflow against a dataset and gate on thresholds / a baseline (exit 1 on failure).
     Eval {
         #[command(subcommand)]
@@ -168,6 +175,35 @@ enum MailboxCmd {
     },
     /// Move a dead-lettered message back to ready.
     Requeue { mailbox: String, id: String },
+}
+
+#[derive(Subcommand)]
+enum ImageCmd {
+    /// Move a digest into a stage; Agents tracking the stage switch to it.
+    Promote {
+        image: String,
+        stage: String,
+        /// sha256:… (from `kennel build` / `kennel push`)
+        digest: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+        /// Attach a `clank eval run --report` file as evidence (for gated stages).
+        #[arg(long)]
+        eval_report: Option<PathBuf>,
+    },
+    /// Put a stage back on its previous digest.
+    Rollback {
+        image: String,
+        stage: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    /// Promotion history, newest first.
+    History {
+        image: String,
+        #[arg(long)]
+        stage: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -439,6 +475,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Token { namespace, cmd } => token_cmd(&api, &namespace, cmd),
         Cmd::Approvals { namespace, cmd } => approvals_cmd(&api, &namespace, cmd),
+        Cmd::Image { namespace, cmd } => image_cmd(&api, &namespace, cmd),
         Cmd::Eval { cmd: EvalCmd::Run { suite, report, baseline, approver_token } } => {
             let approver = approver_token.map(|token| Api { token, ..api.clone() });
             eval::run(&api, approver.as_ref().unwrap_or(&api), &suite, report.as_deref(), baseline.as_deref())
@@ -806,6 +843,48 @@ fn worker(api: &Api, ns: &str, queue: &str, exec: &str, owner: &str, ttl: u64, m
             Err(e) => eprintln!("  {task} result rejected: {e:#}"),
         }
         done += 1;
+    }
+    Ok(())
+}
+
+fn image_cmd(api: &Api, ns: &str, cmd: ImageCmd) -> Result<()> {
+    use reqwest::Method as M;
+    let base = |image: &str| format!("/v1/namespaces/{ns}/agentimages/{image}");
+    let short = |d: &Value| d.as_str().map(|d| d.chars().take(19).collect::<String>()).unwrap_or_else(|| "-".into());
+    let done = |r: &Value| {
+        let agents = r["agentsUpdated"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+        println!("{} {} → {}{}", r["stage"].as_str().unwrap_or("?"), short(&r["previousDigest"]), short(&r["digest"]), if agents.is_empty() { String::new() } else { format!(" · rolling out to {agents}") });
+    };
+    match cmd {
+        ImageCmd::Promote { image, stage, digest, reason, eval_report } => {
+            let evidence = match eval_report {
+                Some(p) => {
+                    let bytes = std::fs::read(&p).with_context(|| format!("read {}", p.display()))?;
+                    let r: Value = serde_json::from_slice(&bytes)?;
+                    use sha2::Digest;
+                    Some(serde_json::json!({"eval": {"suite": r["suite"], "passRate": r["passRate"], "avgCostUSD": r["avgCostUsd"], "at": r["at"], "reportSha256": hex::encode(sha2::Sha256::digest(&bytes))}}))
+                }
+                None => None,
+            };
+            let body = serde_json::json!({"stage": stage, "digest": digest, "reason": reason, "evidence": evidence});
+            done(&ok(api.req(M::POST, &format!("{}/promotions", base(&image))).json(&body).send()?)?.json()?);
+        }
+        ImageCmd::Rollback { image, stage, reason } => {
+            done(&ok(api.req(M::POST, &format!("{}/rollback", base(&image))).json(&serde_json::json!({"stage": stage, "reason": reason})).send()?)?.json()?);
+        }
+        ImageCmd::History { image, stage } => {
+            let q = stage.map(|s| format!("?stage={s}")).unwrap_or_default();
+            let h: Vec<Value> = ok(api.req(M::GET, &format!("{}/promotions{q}", base(&image))).send()?)?.json()?;
+            let s = |v: &Value| v.as_str().unwrap_or("-").to_owned();
+            let rows: Vec<Vec<String>> = h
+                .iter()
+                .map(|p| {
+                    let ev = p["evidence"]["eval"]["passRate"].as_f64().map(|r| format!("eval {:.0}%", r * 100.0)).unwrap_or_default();
+                    vec![s(&p["at"]).chars().take(19).collect(), s(&p["stage"]), short(&p["digest"]), if p["rollback"] == true { "rollback".into() } else { "promote".into() }, s(&p["promotedBy"]), ev, s(&p["reason"])]
+                })
+                .collect();
+            print_table(&["AT", "STAGE", "DIGEST", "ACTION", "BY", "EVIDENCE", "REASON"].map(String::from), &rows);
+        }
     }
     Ok(())
 }

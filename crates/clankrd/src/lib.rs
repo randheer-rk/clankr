@@ -35,6 +35,7 @@ pub mod authz;
 pub mod backup;
 mod contexts;
 pub mod identity;
+mod images;
 pub mod telemetry;
 pub mod tls;
 mod ui;
@@ -126,6 +127,7 @@ pub fn router(state: AppState) -> Router {
         .merge(authz::routes())
         .merge(quota::routes())
         .merge(approvals::routes())
+        .merge(images::routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
@@ -330,6 +332,7 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "AgentDeployment" => clankr_types::agent::admit_deployment(&r.spec).map(drop),
         "VolumeClaim" => clankr_types::agent::admit_volume_claim(&r.spec).map(drop),
         "AgentMailbox" => clankr_types::agent::admit_mailbox(&r.spec).map(drop),
+        "AgentImage" => clankr_types::agent::admit_agent_image(&r.spec).map(drop),
         "RoleBinding" => clankr_types::rbac::admit_role_binding(&r.spec).map(drop),
         "ServiceAccount" => clankr_types::rbac::admit_service_account(&r.spec).map(drop),
         "ResourceQuota" => clankr_types::quota::admit_resource_quota(&r.spec).map(drop),
@@ -443,6 +446,7 @@ async fn create(
     Json(r): Json<Resource>,
 ) -> ApiResult<(StatusCode, Json<Resource>)> {
     check_target(&r, &ns, kind(&plural)?, None)?;
+    images::admit_tracking(&s.store, &r).await?;
     let _quota = quota::admit(&s.store, &r).await?;
     if q.dry_run {
         return Ok((StatusCode::OK, Json(r)));
@@ -474,6 +478,7 @@ async fn update(
     Json(r): Json<Resource>,
 ) -> ApiResult<Json<Resource>> {
     check_target(&r, &ns, kind(&plural)?, Some(&name))?;
+    images::admit_tracking(&s.store, &r).await?;
     let _quota = quota::admit(&s.store, &r).await?;
     if q.dry_run {
         return Ok(Json(r));

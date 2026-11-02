@@ -25,9 +25,67 @@ pub struct AgentSpec {
     /// Persistent volumes mounted into each instance (VolumeClaims in the same namespace).
     #[serde(default)]
     pub volumes: Vec<VolumeMount>,
+    /// Follow a stage of an AgentImage: promoting or rolling back that stage rewrites
+    /// `runtime.image` here, and the scheduler restarts instances on the new digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<ImageTrack>,
     /// AgentMailboxes this agent may send to and receive from.
     #[serde(default)]
     pub mailboxes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageTrack {
+    /// AgentImage name in the same namespace.
+    pub image: String,
+    pub stage: String,
+}
+
+/// `kind: AgentImage`: an image repository with promotion stages (BLD-17). Digests move
+/// through `stages` in order; a stage can require evaluation evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentImageSpec {
+    /// e.g. `registry.example/team/researcher` (no tag or digest).
+    pub repository: String,
+    #[serde(default = "default_stages")]
+    pub stages: Vec<String>,
+    /// Per-stage requirements for promoting into it.
+    #[serde(default)]
+    pub gates: BTreeMap<String, StageGate>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StageGate {
+    /// Promotion evidence must include an evaluation report with at least this pass rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_eval_pass_rate: Option<f64>,
+}
+
+fn default_stages() -> Vec<String> {
+    vec!["dev".into(), "staging".into(), "production".into()]
+}
+
+pub fn admit_agent_image(spec: &serde_json::Value) -> Result<AgentImageSpec, ApiError> {
+    let s: AgentImageSpec = serde_json::from_value(spec.clone()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, format!("agent image: {e}")).field("spec"))?;
+    if s.repository.is_empty() || s.repository.contains('@') || s.repository.rsplit('/').next().is_some_and(|last| last.contains(':')) {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "repository without tag or digest, e.g. registry.example/team/agent").field("spec.repository"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if s.stages.is_empty() || !s.stages.iter().all(|st| !st.is_empty() && seen.insert(st)) {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "stages must be non-empty and unique").field("spec.stages"));
+    }
+    if let Some(k) = s.gates.keys().find(|k| !s.stages.contains(k)) {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, format!("gate for unknown stage {k:?}")).field(format!("spec.gates.{k}")));
+    }
+    Ok(s)
+}
+
+/// `sha256:<64 lowercase hex>`
+pub fn is_digest(d: &str) -> bool {
+    d.strip_prefix("sha256:").is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
 }
 
 /// `kind: AgentMailbox` (CL-30-02).

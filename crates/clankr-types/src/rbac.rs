@@ -63,6 +63,8 @@ pub enum Perm {
     SecretsWrite,
     /// RoleBindings, ServiceAccounts and their tokens.
     RbacWrite,
+    /// Moving an image digest between AgentImage stages (deploys it wherever that stage is tracked).
+    ImagesPromote,
     /// Cluster-only: node maintenance.
     NodesManage,
     /// Cluster-only: the audit log.
@@ -153,6 +155,7 @@ pub fn required(method: &str, path: &str) -> Option<(Option<String>, Perm)> {
         ["v1", "nodes", ..] => (None, NodesManage),
         ["v1", "namespaces", n, "secrets", ..] => (ns(n), if read { SecretsRead } else { SecretsWrite }),
         ["v1", "namespaces", n, "serviceaccounts", _, "tokens", ..] => (ns(n), if read { ResourcesRead } else { RbacWrite }),
+        ["v1", "namespaces", n, "agentimages", _, "promotions" | "rollback"] if !read => (ns(n), ImagesPromote),
         // recorded prompts and responses can hold anything an agent saw: secret-level access
         ["v1", "namespaces", n, "runs", _, "traces"] => (ns(n), SecretsRead),
         ["v1", "namespaces", n, "workflows", _, "runs"] | ["v1", "namespaces", n, "runs", ..] => (ns(n), if read { RunsRead } else { RunsWrite }),
@@ -183,6 +186,7 @@ mod tests {
         assert!(Role::Editor.grants(Perm::WorkExecute) && !Role::Editor.grants(Perm::SecretsWrite));
         assert!(Role::Approver.grants(Perm::ApprovalsDecide) && !Role::Approver.grants(Perm::ResourcesWrite));
         assert!(Role::Admin.grants(Perm::SecretsWrite) && !Role::Admin.grants(Perm::NodesManage));
+        assert!(Role::Admin.grants(Perm::ImagesPromote) && !Role::Editor.grants(Perm::ImagesPromote));
         assert!(Role::ClusterAdmin.grants(Perm::AuditRead));
 
         let r = |m, p| required(m, p).map(|(n, perm)| (n.unwrap_or_default(), perm));
@@ -194,6 +198,8 @@ mod tests {
         assert_eq!(r("GET", "/v1/agents"), Some(("".into(), Perm::ResourcesRead)));
         assert_eq!(r("GET", "/v1/audit"), Some(("".into(), Perm::AuditRead)));
         assert_eq!(r("GET", "/v1/whoami"), None);
+        assert_eq!(r("POST", "/v1/namespaces/a/agentimages/x/promotions"), Some(("a".into(), Perm::ImagesPromote)));
+        assert_eq!(r("GET", "/v1/namespaces/a/agentimages/x/promotions"), Some(("a".into(), Perm::ResourcesRead)));
         assert_eq!(r("GET", "/v1/namespaces/a/runs/x/traces"), Some(("a".into(), Perm::SecretsRead)));
         assert_eq!(r("GET", "/v1/namespaces/a/runs/x/history"), Some(("a".into(), Perm::RunsRead)));
     }
