@@ -222,4 +222,5 @@ M5 (gated backlog, in progress):
 - [x] Budget alerts: per-budget percent thresholds fire once per window (audited, optional webhook), shown on the Budgets page
 - [x] Web UI additions: SSO sign-in (authorization code + PKCE, `--oidc-client-id`, public `/v1/auth/config`), People & access (role bindings, service accounts, tokens), Audit log (newest first), run Tools tab, budget alerts
 - [x] Canary releases (ADR 0020): `rollout.canary` holds a deployment on the stable generation while N canaries run the new one; promoted after a healthy analysis window, rolled back on task failure ratio or progress deadline; instances record the exact Agent spec they run
+- [x] Sandboxed tools + MCP (ADR 0021): `sandbox` executor (kennel container per call, no network, capped, ImagePolicy + signatures), `mcpStdio` (stdio MCP server in that sandbox), `mcpHttp` (streamable HTTP, sessions, SSE); `clankrd --tool-kennel`
 - [x] Autoscaling (ADR 0019): AgentDeployment `autoscale` from queue depth, up at once, down after a stabilization delay, scale to zero and back; leader-owned state

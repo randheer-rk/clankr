@@ -42,6 +42,12 @@ struct Args {
     /// Public OIDC client the web UI uses (authorization code + PKCE); defaults to the audience.
     #[arg(long, env = "CLANKR_OIDC_CLIENT_ID")]
     oidc_client_id: Option<String>,
+    /// kennel binary for sandboxed tools (`sandbox` and `mcpStdio` executors); off when unset.
+    #[arg(long, env = "CLANKR_TOOL_KENNEL")]
+    tool_kennel: Option<PathBuf>,
+    /// kennel image store for sandboxed tools (default: kennel's own).
+    #[arg(long, env = "CLANKR_TOOL_KENNEL_ROOT")]
+    tool_kennel_root: Option<PathBuf>,
     /// Directory with pg_dump/pg_restore (default: PATH, or the embedded server's with --dev).
     #[arg(long, env = "CLANKR_PG_BIN", global = true)]
     pg_bin: Option<PathBuf>,
@@ -107,6 +113,10 @@ async fn main() -> anyhow::Result<()> {
         let mut o = clankrd::authz::Oidc::new(issuer, aud, args.oidc_user_claim, args.oidc_groups_claim);
         o.client_id = args.oidc_client_id;
         state.oidc = Some(std::sync::Arc::new(o));
+    }
+    if let Some(kennel) = args.tool_kennel {
+        tracing::info!(kennel = %kennel.display(), "sandboxed tools enabled");
+        state.gateway = state.gateway.clone().with_sandbox(clankr_gateway::sandbox::Sandbox { kennel, root: args.tool_kennel_root });
     }
     let tls = if args.insecure_http {
         tracing::warn!("serving plain HTTP: credentials travel unencrypted and nodes can't join");

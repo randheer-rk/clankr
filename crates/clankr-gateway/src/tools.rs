@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::sandbox::{Container, admit_container, mcp_http};
 use crate::{Gateway, SecretRef};
 
 /// `kind: Tool`: a versioned capability with typed methods.
@@ -49,6 +50,19 @@ pub enum Executor {
     },
     /// Fixed outputs per method (tests, evaluations, dry runs). `{"$error": "..."}` fails.
     Mock { responses: BTreeMap<String, Value> },
+    /// A fresh container per call (no network): `{method, input, idempotencyKey, runId, task}`
+    /// as JSON on stdin, the result on stdout; exit non-zero to fail. Shell and code runners.
+    Sandbox { container: Container },
+    /// An MCP server over streamable HTTP; each method is the MCP tool of the same name.
+    McpHttp {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret_ref: Option<SecretRef>,
+        #[serde(default = "default_header")]
+        header: String,
+    },
+    /// A stdio MCP server, started in a fresh sandbox container for each call.
+    McpStdio { container: Container },
 }
 
 fn default_header() -> String {
@@ -164,8 +178,10 @@ pub fn admit_tool(spec: &Value) -> Result<ToolSpec, ApiError> {
     if s.methods.is_empty() {
         return Err(invalid("spec.methods", "declare at least one method"));
     }
-    if let Executor::Http { url, .. } = &s.executor {
-        crate::check_endpoint(url).map_err(|e| invalid("spec.executor.url", e.message))?;
+    match &s.executor {
+        Executor::Http { url, .. } | Executor::McpHttp { url, .. } => crate::check_endpoint(url).map_err(|e| invalid("spec.executor.url", e.message))?,
+        Executor::Sandbox { container } | Executor::McpStdio { container } => admit_container(container).map_err(|e| invalid("spec.executor.container", e))?,
+        Executor::Mock { .. } => {}
     }
     if !(1..=600).contains(&s.timeout_seconds) || !(1..=16 << 20).contains(&s.max_output_bytes) {
         return Err(invalid("spec", "timeoutSeconds 1..600, maxOutputBytes 1..16MiB"));
@@ -387,6 +403,21 @@ impl Gateway {
         id.ok_or_else(need)
     }
 
+    fn sandbox(&self) -> Result<&crate::sandbox::Sandbox, ApiError> {
+        self.sandbox.as_ref().ok_or_else(|| ApiError::new(ErrorCode::ProviderUnavailable, "sandboxed tools aren't enabled on this control plane (start clankrd with --tool-kennel)"))
+    }
+
+    /// Re-read per call: a policy change applies to the very next tool run.
+    async fn image_policies(&self, ns: &str) -> Result<Vec<(String, clankr_types::agent::ImagePolicySpec)>, ApiError> {
+        self.store
+            .list("ImagePolicy", Some(ns), &Default::default())
+            .await?
+            .0
+            .into_iter()
+            .map(|p| Ok((p.metadata.name.clone(), clankr_types::agent::admit_image_policy(&p.spec)?)))
+            .collect()
+    }
+
     async fn recorded(&self, ns: &str, claim: &str, key: &str) -> Result<Option<Recorded>, ApiError> {
         sqlx::query_as("select state, input_sha256, output, output_sha256, truncated, duration_ms, tool_version, approval_id from tool_calls where namespace = $1 and claim = $2 and idempotency_key = $3")
             .bind(ns)
@@ -404,6 +435,18 @@ impl Gateway {
                 Some(v) => Ok(v.clone()),
                 None => Err(ApiError::new(ErrorCode::InvalidSpec, format!("mock tool has no response for {}", call.method))),
             },
+            Executor::Sandbox { container } => {
+                let request = json!({"method": call.method, "input": call.input, "idempotencyKey": call.idempotency_key, "runId": call.run_id, "task": call.task});
+                self.sandbox()?.run(container, &self.image_policies(ns).await?, &request).await
+            }
+            Executor::McpStdio { container } => self.sandbox()?.mcp(container, &self.image_policies(ns).await?, &call.method, &call.input).await,
+            Executor::McpHttp { url, secret_ref, header } => {
+                let secret = match secret_ref {
+                    Some(r) => Some(self.store.secret_read(ctx, &self.master, ns, &r.name, &r.key, &format!("tool gateway: {}", call.tool)).await?),
+                    None => None,
+                };
+                mcp_http(&self.http, url, secret.as_deref().map(|v| (header.as_str(), v)), &call.method, &call.input).await
+            }
             Executor::Http { url, secret_ref, header } => {
                 let mut rb = self.http.post(url).json(&json!({"method": call.method, "input": call.input, "idempotencyKey": call.idempotency_key, "runId": call.run_id, "task": call.task}));
                 if let Some(r) = secret_ref {

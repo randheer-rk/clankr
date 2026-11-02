@@ -12,7 +12,7 @@ clankr-types = { path = "../clankr-types" }
 clankr-store = { path = "../clankr-store" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "process", "io-util"] }
 url = "2"
 uuid = { version = "1", features = ["serde"] }
 tracing = "0.1.44"

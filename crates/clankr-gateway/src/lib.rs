@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 mod providers;
+pub mod sandbox;
 pub mod tools;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,6 +260,7 @@ pub struct Gateway {
     store: Store,
     master: MasterKey,
     http: reqwest::Client,
+    sandbox: Option<sandbox::Sandbox>,
 }
 
 impl Gateway {
@@ -268,7 +270,13 @@ impl Gateway {
             .timeout(Duration::from_secs(300))
             .build()
             .expect("http client");
-        Self { store, master, http }
+        Self { store, master, http, sandbox: None }
+    }
+
+    /// Enables `sandbox` and `mcpStdio` tools, run as kennel containers on this host.
+    pub fn with_sandbox(mut self, sandbox: sandbox::Sandbox) -> Self {
+        self.sandbox = Some(sandbox);
+        self
     }
 
     #[tracing::instrument(name = "model.generate", skip(self, ctx, req), fields(
