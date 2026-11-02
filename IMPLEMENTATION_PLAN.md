@@ -213,3 +213,7 @@ M4 (operations beta):
 - [x] Image promotion (ADR 0016): AgentImage stages, digest-only, no stage skipping, eval-evidence gates, admin-only ImagesPromote, rollback, history + audit; Agents `track` a stage and are rewritten on promotion; scheduler restarts instances when their Agent generation changes (fixes spec rollout); `clank image promote|rollback|history --eval-report`
 
 **M4 complete.**
+
+M5 (gated backlog, in progress):
+- [x] Control-plane HA: nodes take every replica (`--server a,b`) and fail over (heartbeat/renew retry across replicas; agent calls move only when the connection never happened); tested by killing the leading replica mid-work (runs keep finishing ~1 s later, instance untouched, lease moves); runbook docs/runbooks/high-availability.md
+

@@ -1,5 +1,6 @@
 //! The node's connection to clankrd. Holds the node credential; agents never see it.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -12,10 +13,92 @@ use serde_json::{Value, json};
 /// One HTTP client shared by a node's instances, swapped in place when the node cert rotates.
 pub type SharedHttp = Arc<RwLock<reqwest::Client>>;
 
+/// The control plane's replicas (`--server a,b,c`). Calls go to the last one that worked; a
+/// replica that can't be reached is skipped in favour of the next (HA failover).
+#[derive(Clone, Debug)]
+pub struct Endpoints(Arc<(Vec<String>, AtomicUsize)>);
+
+impl Endpoints {
+    pub fn parse(list: &str) -> Self {
+        let urls: Vec<String> = list.split(',').map(|u| u.trim().trim_end_matches('/').to_owned()).filter(|u| !u.is_empty()).collect();
+        assert!(!urls.is_empty(), "no control plane address given");
+        Self(Arc::new((urls, AtomicUsize::new(0))))
+    }
+
+    /// Every replica, starting with the one that last worked.
+    fn order(&self) -> Vec<(usize, &str)> {
+        let (urls, cur) = &*self.0;
+        let start = cur.load(Ordering::Relaxed);
+        (0..urls.len()).map(|i| (start + i) % urls.len()).map(|i| (i, urls[i].as_str())).collect()
+    }
+
+    fn worked(&self, i: usize) {
+        self.0.1.store(i, Ordering::Relaxed);
+    }
+
+    pub fn current(&self) -> String {
+        let (urls, cur) = &*self.0;
+        urls[cur.load(Ordering::Relaxed) % urls.len()].clone()
+    }
+
+    /// Runs `f` against replicas in order until one answers; only "unreachable" moves on.
+    async fn first_reachable<T, F, Fut>(&self, mut f: F) -> Result<T, ApiError>
+    where
+        F: FnMut(String) -> Fut,
+        Fut: std::future::Future<Output = Result<T, Attempt>>,
+    {
+        let mut last = None;
+        for (i, url) in self.order() {
+            match f(url.to_owned()).await {
+                Ok(v) => {
+                    self.worked(i);
+                    return Ok(v);
+                }
+                Err(Attempt::Refused(e)) => {
+                    self.worked(i);
+                    return Err(e);
+                }
+                Err(Attempt::Unreachable(e)) => {
+                    tracing::warn!(replica = %url, error = %e.message, "control plane replica unreachable; trying the next");
+                    last = Some(e);
+                }
+            }
+        }
+        Err(last.expect("at least one replica"))
+    }
+}
+
+impl From<&str> for Endpoints {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+/// Outcome of one replica attempt: a real answer (even an error) stops the failover.
+enum Attempt {
+    Unreachable(ApiError),
+    Refused(ApiError),
+}
+
+fn unreachable(e: reqwest::Error) -> Attempt {
+    Attempt::Unreachable(ApiError::new(ErrorCode::StorageUnavailable, format!("control plane unreachable: {}", e.without_url())))
+}
+
+/// A response's JSON, or the server's ApiError. 503 (that replica lost its database) also fails over.
+async fn answer(resp: reqwest::Response, what: &str) -> Result<Value, Attempt> {
+    let status = resp.status();
+    let v: Value = resp.json().await.unwrap_or(Value::Null);
+    if status.is_success() {
+        return Ok(v);
+    }
+    let e = serde_json::from_value(v).unwrap_or_else(|_| ApiError::new(ErrorCode::StorageUnavailable, format!("{what} failed: HTTP {status}")));
+    Err(if status == StatusCode::SERVICE_UNAVAILABLE { Attempt::Unreachable(e) } else { Attempt::Refused(e) })
+}
+
 #[derive(Clone)]
 pub struct Client {
     http: SharedHttp,
-    base: String,
+    servers: Endpoints,
     /// Owner bearer token (single-agent dev mode); empty for fleet nodes, which use mTLS.
     token: String,
     ns: String,
@@ -33,7 +116,7 @@ pub struct NodeTls {
 impl NodeTls {
     pub fn client(&self, timeout: Duration) -> reqwest::Client {
         // trust exactly the cluster CA, not the system roots
-        let mut b = reqwest::Client::builder().timeout(timeout).tls_certs_only([self.ca.clone()]);
+        let mut b = reqwest::Client::builder().timeout(timeout).connect_timeout(Duration::from_secs(3)).tls_certs_only([self.ca.clone()]);
         if let Some(id) = &self.identity {
             b = b.identity(id.clone());
         }
@@ -68,40 +151,59 @@ pub struct Lease {
 impl Client {
     pub fn new(base: &str, token: &str, ns: &str) -> Self {
         let http = reqwest::Client::builder().timeout(Duration::from_secs(330)).build().expect("http client");
-        Self { http: Arc::new(RwLock::new(http)), base: base.trim_end_matches('/').to_owned(), token: token.to_owned(), ns: ns.to_owned(), workload: None }
+        Self { http: Arc::new(RwLock::new(http)), servers: Endpoints::parse(base), token: token.to_owned(), ns: ns.to_owned(), workload: None }
     }
 
     /// A fleet node's client for one instance: mTLS as the node, acting under `workload`.
-    pub fn fleet(base: &str, http: SharedHttp, ns: &str, workload: Arc<RwLock<String>>) -> Self {
-        Self { http, base: base.trim_end_matches('/').to_owned(), token: String::new(), ns: ns.to_owned(), workload: Some(workload) }
+    pub fn fleet(servers: &Endpoints, http: SharedHttp, ns: &str, workload: Arc<RwLock<String>>) -> Self {
+        Self { http, servers: servers.clone(), token: String::new(), ns: ns.to_owned(), workload: Some(workload) }
     }
 
-    /// Sends a request; returns the JSON body (Null for 204) or the server's ApiError.
+    /// Sends a request; returns the JSON body (Null for 204) or the server's ApiError. Fails over
+    /// to another replica only when the connection was never made, so nothing is sent twice.
     async fn call(&self, m: Method, path: &str, body: Option<&Value>, on_behalf_of: Option<&str>) -> Result<Value, ApiError> {
         let http = self.http.read().expect("lock").clone();
-        let mut rb = http.request(m, format!("{}/v1/namespaces/{}{path}", self.base, self.ns));
-        if !self.token.is_empty() {
-            rb = rb.bearer_auth(&self.token);
+        let mut last = None;
+        for (i, base) in self.servers.order() {
+            let mut rb = http.request(m.clone(), format!("{base}/v1/namespaces/{}{path}", self.ns));
+            if !self.token.is_empty() {
+                rb = rb.bearer_auth(&self.token);
+            }
+            if let Some(w) = &self.workload {
+                rb = rb.header("x-clankr-workload", w.read().expect("lock").as_str());
+            }
+            if let Some(b) = body {
+                rb = rb.json(b);
+            }
+            if let Some(who) = on_behalf_of {
+                rb = rb.header("x-clankr-on-behalf-of", who);
+            }
+            let resp = match rb.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    let connect = e.is_connect();
+                    let err = ApiError::new(ErrorCode::StorageUnavailable, format!("control plane unreachable: {}", e.without_url()));
+                    if connect {
+                        last = Some(err);
+                        continue;
+                    }
+                    // the request may have arrived: don't resend, but use another replica next time
+                    self.servers.worked((i + 1) % self.servers.0.0.len());
+                    return Err(err);
+                }
+            };
+            self.servers.worked(i);
+            let status = resp.status();
+            if status == StatusCode::NO_CONTENT {
+                return Ok(Value::Null);
+            }
+            let text = resp.text().await.unwrap_or_default();
+            if status.is_success() {
+                return Ok(serde_json::from_str(&text).unwrap_or(Value::Null));
+            }
+            return Err(serde_json::from_str(&text).unwrap_or_else(|_| ApiError::new(ErrorCode::StorageUnavailable, format!("HTTP {status}: {text}"))));
         }
-        if let Some(w) = &self.workload {
-            rb = rb.header("x-clankr-workload", w.read().expect("lock").as_str());
-        }
-        if let Some(b) = body {
-            rb = rb.json(b);
-        }
-        if let Some(who) = on_behalf_of {
-            rb = rb.header("x-clankr-on-behalf-of", who);
-        }
-        let resp = rb.send().await.map_err(|e| ApiError::new(ErrorCode::StorageUnavailable, format!("control plane unreachable: {}", e.without_url())))?;
-        let status = resp.status();
-        if status == StatusCode::NO_CONTENT {
-            return Ok(Value::Null);
-        }
-        let text = resp.text().await.unwrap_or_default();
-        if status.is_success() {
-            return Ok(serde_json::from_str(&text).unwrap_or(Value::Null));
-        }
-        Err(serde_json::from_str(&text).unwrap_or_else(|_| ApiError::new(ErrorCode::StorageUnavailable, format!("HTTP {status}: {text}"))))
+        Err(last.expect("at least one replica"))
     }
 
     pub async fn agent(&self, name: &str) -> Result<Resource, ApiError> {
@@ -153,62 +255,51 @@ impl Client {
     }
 
     /// Joins the cluster: sends a CSR for a key generated here, returns the node's client
-    /// identity (certificate + key). The key never leaves this process.
-    /// Returns the identity and its certificate PEM (for expiry tracking).
-    pub async fn join(base: &str, ca: &reqwest::Certificate, name: &str, join_token: &str, capacity: &Value, labels: &Value) -> Result<(reqwest::Identity, String), ApiError> {
+    /// identity (certificate + key) and its certificate PEM. The key never leaves this process.
+    pub async fn join(servers: &Endpoints, ca: &reqwest::Certificate, name: &str, join_token: &str, capacity: &Value, labels: &Value) -> Result<(reqwest::Identity, String), ApiError> {
         let (key, csr) = clankr_tls::node_key_and_csr(name).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, e.to_string()))?;
         let http = NodeTls { ca: ca.clone(), identity: None }.client(Duration::from_secs(30));
-        let resp = http
-            .post(format!("{}/v1/nodes/join", base.trim_end_matches('/')))
-            .json(&json!({"name": name, "joinToken": join_token, "csr": csr, "capacity": capacity, "labels": labels}))
-            .send()
-            .await
-            .map_err(|e| ApiError::new(ErrorCode::StorageUnavailable, format!("control plane unreachable: {e}")))?;
-        let ok = resp.status().is_success();
-        let v: Value = resp.json().await.unwrap_or(Value::Null);
-        if !ok {
-            return Err(serde_json::from_value(v).unwrap_or_else(|_| ApiError::new(ErrorCode::Unauthenticated, "join refused")));
-        }
-        let cert = v["certificate"].as_str().ok_or_else(|| ApiError::new(ErrorCode::StorageUnavailable, "join reply without certificate"))?;
-        let id = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, e.to_string()))?;
-        Ok((id, cert.to_owned()))
+        let body = json!({"name": name, "joinToken": join_token, "csr": csr, "capacity": capacity, "labels": labels});
+        let v = servers
+            .first_reachable(|base| {
+                let rb = http.post(format!("{base}/v1/nodes/join")).json(&body);
+                async move { answer(rb.send().await.map_err(unreachable)?, "join").await }
+            })
+            .await?;
+        identity(&v, &key)
     }
 
     /// Rotates the node certificate: new key here, CSR to clankrd over the current mTLS identity.
-    pub async fn renew(base: &str, tls: &NodeTls, name: &str) -> Result<(reqwest::Identity, String), ApiError> {
+    pub async fn renew(servers: &Endpoints, tls: &NodeTls, name: &str) -> Result<(reqwest::Identity, String), ApiError> {
         let (key, csr) = clankr_tls::node_key_and_csr(name).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, e.to_string()))?;
-        let resp = tls
-            .client(Duration::from_secs(30))
-            .post(format!("{}/v1/nodes/{name}/renew", base.trim_end_matches('/')))
-            .json(&json!({"csr": csr}))
-            .send()
-            .await
-            .map_err(|e| ApiError::new(ErrorCode::StorageUnavailable, format!("control plane unreachable: {}", e.without_url())))?;
-        let ok = resp.status().is_success();
-        let v: Value = resp.json().await.unwrap_or(Value::Null);
-        if !ok {
-            return Err(serde_json::from_value(v).unwrap_or_else(|_| ApiError::new(ErrorCode::StorageUnavailable, "renew failed")));
-        }
-        let cert = v["certificate"].as_str().ok_or_else(|| ApiError::new(ErrorCode::StorageUnavailable, "renew reply without certificate"))?;
-        let id = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, e.to_string()))?;
-        Ok((id, cert.to_owned()))
+        let http = tls.client(Duration::from_secs(30));
+        let body = json!({"csr": csr});
+        let v = servers
+            .first_reachable(|base| {
+                let rb = http.post(format!("{base}/v1/nodes/{name}/renew")).json(&body);
+                async move { answer(rb.send().await.map_err(unreachable)?, "renew").await }
+            })
+            .await?;
+        identity(&v, &key)
     }
 
     /// Heartbeat over mTLS; returns this node's current assignments with fresh identity tokens.
-    pub async fn node_heartbeat(base: &str, tls: &NodeTls, name: &str) -> Result<Vec<Assignment>, ApiError> {
-        let resp = tls
-            .client(Duration::from_secs(10))
-            .post(format!("{}/v1/nodes/{name}/heartbeat", base.trim_end_matches('/')))
-            .send()
-            .await
-            .map_err(|e| ApiError::new(ErrorCode::StorageUnavailable, format!("control plane unreachable: {}", e.without_url())))?;
-        let ok = resp.status().is_success();
-        let v: Value = resp.json().await.unwrap_or(Value::Null);
-        if !ok {
-            return Err(serde_json::from_value(v).unwrap_or_else(|_| ApiError::new(ErrorCode::StorageUnavailable, "heartbeat failed")));
-        }
+    pub async fn node_heartbeat(servers: &Endpoints, tls: &NodeTls, name: &str) -> Result<Vec<Assignment>, ApiError> {
+        let http = tls.client(Duration::from_secs(10));
+        let v = servers
+            .first_reachable(|base| {
+                let rb = http.post(format!("{base}/v1/nodes/{name}/heartbeat"));
+                async move { answer(rb.send().await.map_err(unreachable)?, "heartbeat").await }
+            })
+            .await?;
         serde_json::from_value(v["assignments"].clone()).map_err(|e| ApiError::new(ErrorCode::StorageUnavailable, e.to_string()))
     }
+}
+
+fn identity(v: &Value, key: &str) -> Result<(reqwest::Identity, String), ApiError> {
+    let cert = v["certificate"].as_str().ok_or_else(|| ApiError::new(ErrorCode::StorageUnavailable, "reply without certificate"))?;
+    let id = reqwest::Identity::from_pem(format!("{cert}\n{key}").as_bytes()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, e.to_string()))?;
+    Ok((id, cert.to_owned()))
 }
 
 /// Percent-encodes everything except unreserved characters and `/` (keys are path-like).

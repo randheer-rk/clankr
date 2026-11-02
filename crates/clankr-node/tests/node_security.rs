@@ -19,10 +19,10 @@ async fn nodes_authenticate_with_certs_and_act_only_under_live_workload_tokens()
     let ca = reqwest::Certificate::from_pem(cp.ca_pem.as_bytes()).unwrap();
     let cap = json!({"memoryMiB": 2048, "cpus": 2.0, "runtimes": ["process"]});
 
-    let e = Client::join(&cp.base, &ca, "n1", "wrong", &cap, &json!({})).await.unwrap_err();
+    let e = Client::join(&cp.base.as_str().into(), &ca, "n1", "wrong", &cap, &json!({})).await.unwrap_err();
     assert_eq!(e.code, clankr_types::ErrorCode::Unauthenticated);
-    let (id1, _) = Client::join(&cp.base, &ca, "n1", "join-secret", &cap, &json!({})).await.unwrap();
-    Client::join(&cp.base, &ca, "n2", "join-secret", &cap, &json!({})).await.unwrap();
+    let (id1, _) = Client::join(&cp.base.as_str().into(), &ca, "n1", "join-secret", &cap, &json!({})).await.unwrap();
+    Client::join(&cp.base.as_str().into(), &ca, "n2", "join-secret", &cap, &json!({})).await.unwrap();
     let n1 = NodeTls { ca: ca.clone(), identity: Some(id1) };
     let http = n1.client(Duration::from_secs(10));
 
@@ -39,7 +39,7 @@ async fn nodes_authenticate_with_certs_and_act_only_under_live_workload_tokens()
     let lead = cp.store.acquire_leadership("scheduler", "t", 30.0).await.unwrap().unwrap();
     clankrd::scheduler::reconcile(&cp.store, &lead).await.unwrap();
 
-    let assignments = Client::node_heartbeat(&cp.base, &n1, "n1").await.unwrap();
+    let assignments = Client::node_heartbeat(&cp.base.as_str().into(), &n1, "n1").await.unwrap();
     assert_eq!(assignments.len(), 1);
     let token = assignments[0].identity.clone();
     let url = |p: &str| format!("{}{p}", cp.base);
@@ -80,8 +80,8 @@ async fn nodes_authenticate_with_certs_and_act_only_under_live_workload_tokens()
     assert_eq!(r.json::<Value>().await.unwrap()["code"], "StaleLease");
 
     // renewal: own certificate only; the new one replaces the old immediately
-    assert_eq!(Client::renew(&cp.base, &n1, "n2").await.unwrap_err().code, clankr_types::ErrorCode::Forbidden);
-    let (renewed, pem) = Client::renew(&cp.base, &n1, "n1").await.unwrap();
+    assert_eq!(Client::renew(&cp.base.as_str().into(), &n1, "n2").await.unwrap_err().code, clankr_types::ErrorCode::Forbidden);
+    let (renewed, pem) = Client::renew(&cp.base.as_str().into(), &n1, "n1").await.unwrap();
     assert!(clankr_tls::not_after_pem(&pem).unwrap() > chrono::Utc::now().timestamp() + 29 * 86_400);
     assert_eq!(http.post(url("/v1/nodes/n1/heartbeat")).send().await.unwrap().status(), StatusCode::OK, "old cert overlaps briefly");
     sqlx::query("update nodes set prev_valid_until = now() - interval '1 second'").execute(cp.store.pool()).await.unwrap();
@@ -90,10 +90,10 @@ async fn nodes_authenticate_with_certs_and_act_only_under_live_workload_tokens()
     let http = n1.client(Duration::from_secs(10));
 
     // re-joining issues a new certificate; the old one stops working
-    let (id1b, _) = Client::join(&cp.base, &ca, "n1", "join-secret", &cap, &json!({})).await.unwrap();
+    let (id1b, _) = Client::join(&cp.base.as_str().into(), &ca, "n1", "join-secret", &cap, &json!({})).await.unwrap();
     assert_eq!(http.post(url("/v1/nodes/n1/heartbeat")).send().await.unwrap().status(), StatusCode::UNAUTHORIZED, "old cert revoked");
     let fresh = NodeTls { ca, identity: Some(id1b) };
-    assert_eq!(Client::node_heartbeat(&cp.base, &fresh, "n1").await.unwrap().len(), 1);
+    assert_eq!(Client::node_heartbeat(&cp.base.as_str().into(), &fresh, "n1").await.unwrap().len(), 1);
 
     let denials = cp.store.audit_since(0, 1000).await.unwrap().into_iter().filter(|e| e.decision == "deny").count();
     assert!(denials >= 3, "denials are audited");

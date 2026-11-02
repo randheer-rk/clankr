@@ -18,6 +18,7 @@ use crate::client::{Assignment, Client, NodeTls};
 use crate::daemon::{Config, run_instance};
 
 pub struct FleetConfig {
+    /// One control plane URL, or several replicas comma-separated (failover).
     pub server: String,
     /// PEM of the cluster CA (clankrd's `<data-dir>/pki/ca.crt`), obtained out of band.
     pub ca_pem: String,
@@ -44,7 +45,8 @@ struct Running {
 
 pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) -> Result<()> {
     let ca = reqwest::Certificate::from_pem(cfg.ca_pem.as_bytes())?;
-    let (identity, mut cert) = Client::join(&cfg.server, &ca, &cfg.name, &cfg.join_token, &cfg.capacity, &cfg.labels).await?;
+    let servers = crate::client::Endpoints::parse(&cfg.server);
+    let (identity, mut cert) = Client::join(&servers, &ca, &cfg.name, &cfg.join_token, &cfg.capacity, &cfg.labels).await?;
     let mut tls = NodeTls { ca, identity: Some(identity) };
     // instances share this client; rotation swaps it under them
     let http: crate::client::SharedHttp = Arc::new(RwLock::new(tls.client(Duration::from_secs(330))));
@@ -59,7 +61,7 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
         }
         let expires = clankr_tls::not_after_pem(&cert).unwrap_or(0);
         if expires - (chrono::Utc::now().timestamp()) < cfg.renew_before.as_secs() as i64 {
-            match Client::renew(&cfg.server, &tls, &cfg.name).await {
+            match Client::renew(&servers, &tls, &cfg.name).await {
                 Ok((id, pem)) => {
                     tls.identity = Some(id);
                     cert = pem;
@@ -69,7 +71,7 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
                 Err(e) => tracing::warn!(error = %e, "certificate renewal failed; will retry"),
             }
         }
-        let want: Vec<Assignment> = match Client::node_heartbeat(&cfg.server, &tls, &cfg.name).await {
+        let want: Vec<Assignment> = match Client::node_heartbeat(&servers, &tls, &cfg.name).await {
             Ok(a) => {
                 last_ok = Instant::now();
                 a
@@ -100,7 +102,7 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
             }
             let (stop, rx) = watch::channel(false);
             let identity = Arc::new(RwLock::new(a.identity.clone()));
-            let client = Client::fleet(&cfg.server, http.clone(), &a.namespace, identity.clone());
+            let client = Client::fleet(&servers, http.clone(), &a.namespace, identity.clone());
             let icfg = Config {
                 agent: a.agent.clone(),
                 namespace: a.namespace.clone(),

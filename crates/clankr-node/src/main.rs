@@ -10,6 +10,7 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(version, about = "Clankr node daemon: runs agent instances and brokers their calls")]
 struct Args {
+    /// Control plane URL, or every replica comma-separated (the node fails over between them).
     #[arg(long, env = "CLANKR_SERVER", default_value = "http://127.0.0.1:7600")]
     server: String,
     #[arg(short, long, default_value = "default")]
