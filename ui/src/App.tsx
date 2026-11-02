@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { Bot, CirclePlay, Gauge, ScrollText, Users, Inbox as InboxIcon, LogOut, Plus, Sparkles, Workflow } from 'lucide-react'
+import { Bot, CirclePlay, Database, Gauge, ScrollText, Users, Inbox as InboxIcon, LogOut, Plus, Sparkles, Workflow } from 'lucide-react'
 import { api, getToken, ns, setToken, type Approval, type Principal, type Run } from './api'
 import { titleCase, usePoll } from './lib'
 import { Inbox } from './pages/Inbox'
@@ -9,6 +9,7 @@ import { Agents, Workflows } from './pages/Resources'
 import { Login } from './pages/Login'
 import { Access } from './pages/Access'
 import { Audit } from './pages/Audit'
+import { Memory } from './pages/Memory'
 
 export interface Ctx {
   ns: string
@@ -87,6 +88,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
           {nav('runs', 'Runs', <CirclePlay />, running)}
           {nav('agents', 'Agents', <Sparkles />)}
           {nav('workflows', 'Workflows', <Workflow />)}
+          {nav('memory', 'Memory', <Database />)}
           <div className="grp">Govern</div>
           {nav('budgets', 'Budgets', <Gauge />)}
           {nav('access', 'People & access', <Users />)}
@@ -111,6 +113,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         {page === 'budgets' && <Budgets />}
         {page === 'access' && <Access />}
         {page === 'audit' && <Audit />}
+        {page === 'memory' && <Memory />}
         {page === 'agents' && <Agents id={id} go={go} />}
         {page === 'workflows' && <Workflows id={id} go={go} />}
       </div>

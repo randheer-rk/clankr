@@ -72,6 +72,7 @@ export class Page {
     const loaded = this.cdp.once("Page.loadEventFired", this.sessionId)
     const r = await this.cdp.send("Page.navigate", { url }, this.sessionId)
     if (r.errorText) throw new Error(`navigate ${url}: ${r.errorText}`)
+    if (!r.loaderId) return // same-document navigation (e.g. only the #hash changed): no load event comes
     await Promise.race([loaded, new Promise((_, err) => setTimeout(() => err(new Error(`load timeout: ${url}`)), timeoutMs))])
   }
   /** Evaluates a JS expression in the page and returns its (JSON) value. */
