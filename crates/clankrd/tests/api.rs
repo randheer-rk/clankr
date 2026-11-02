@@ -268,3 +268,25 @@ async fn secrets_are_write_only_and_models_go_through_the_gateway() {
     let r = s.req(M::POST, "/v1/namespaces/research/models/nope/generate").json(&json!({"messages": [{"role": "user", "content": "x"}]})).send().await.unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn recorded_model_calls_export_per_run() {
+    let s = Server::start().await;
+    use reqwest::Method as M;
+    let r = |kind: &str, name: &str, spec: Value| json!({"apiVersion": "clankr.io/v1alpha1", "kind": kind, "metadata": {"name": name, "namespace": "research"}, "spec": spec});
+    for (plural, body) in [
+        ("providerconnections", r("ProviderConnection", "rec", json!({"provider": "mock", "allowedModels": ["m"], "record": true}))),
+        ("modelclaims", r("ModelClaim", "c", json!({"providerConnection": "rec", "model": "m"}))),
+    ] {
+        assert!(s.req(M::POST, &format!("/v1/namespaces/research/{plural}")).json(&body).send().await.unwrap().status().is_success());
+    }
+    let run = "6f1c1e0e-0000-4000-8000-000000000001";
+    let g = s.req(M::POST, "/v1/namespaces/research/models/c/generate").json(&json!({"messages": [{"role": "user", "content": "hi"}], "runId": run})).send().await.unwrap();
+    assert!(g.status().is_success());
+    let t: Vec<Value> = s.req(M::GET, &format!("/v1/namespaces/research/runs/{run}/traces")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(t.len(), 1);
+    assert_eq!((t[0]["response"].as_str(), t[0]["request"]["messages"][0]["content"].as_str()), (Some("mock(m): hi"), Some("hi")));
+    assert_eq!(t[0]["promptSha256"].as_str().map(str::len), Some(64));
+    let none: Vec<Value> = s.req(M::GET, "/v1/namespaces/research/runs/6f1c1e0e-0000-4000-8000-000000000002/traces").send().await.unwrap().json().await.unwrap();
+    assert!(none.is_empty());
+}

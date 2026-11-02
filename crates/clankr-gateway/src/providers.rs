@@ -22,6 +22,7 @@ pub(crate) async fn call(
 ) -> Result<Reply, ApiError> {
     match conn.provider {
         Provider::Mock => Ok(mock(model, req)),
+        Provider::Replay => replay(conn, req),
         Provider::OpenaiCompatible => openai(http, conn, model, key.unwrap_or_default(), req, max_out).await,
         Provider::Anthropic => anthropic(http, conn, model, key.unwrap_or_default(), req, max_out).await,
     }
@@ -36,6 +37,22 @@ fn mock(model: &str, req: &GenerateRequest) -> Reply {
     let text = format!("mock({model}): {last}");
     let input = req.messages.iter().map(|m| tokens(&m.content)).sum::<i64>() + req.system.as_deref().map_or(0, tokens);
     Reply { usage: Usage { input_tokens: input, output_tokens: tokens(&text) }, text, stop_reason: Some("end_turn".into()) }
+}
+
+fn replay(conn: &ProviderConnectionSpec, req: &GenerateRequest) -> Result<Reply, ApiError> {
+    let hash = crate::prompt_sha256(req);
+    let text: String = req.system.iter().chain(req.messages.iter().map(|m| &m.content)).cloned().collect::<Vec<_>>().join("\n");
+    let e = conn
+        .script
+        .iter()
+        .find(|e| e.prompt_sha256.as_deref() == Some(hash.as_str()))
+        .or_else(|| conn.script.iter().find(|e| e.prompt_sha256.is_none() && e.contains.as_deref().is_some_and(|c| text.contains(c))))
+        .ok_or_else(|| ApiError::new(ErrorCode::InvalidSpec, format!("replay: no recorded response for this prompt (promptSha256 {hash}); the agent's prompt changed or the trace is incomplete")))?;
+    Ok(Reply {
+        text: e.reply.clone(),
+        stop_reason: e.stop_reason.clone().or_else(|| Some("end_turn".into())),
+        usage: Usage { input_tokens: if e.input_tokens > 0 { e.input_tokens } else { tokens(&text) }, output_tokens: if e.output_tokens > 0 { e.output_tokens } else { tokens(&e.reply) } },
+    })
 }
 
 fn endpoint(conn: &ProviderConnectionSpec, default: &str) -> String {

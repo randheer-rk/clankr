@@ -1,0 +1,79 @@
+description: An unsafe task whose lease lapsed waits as outcome-unknown until an operator resolves it.
+graph:
+  entrypoint: pay
+  nodes:
+    notify:
+      agentRef: notifier
+      type: agent
+    pay:
+      next: notify
+      sideEffects: unsafe
+      toolRef: payments
+      type: activity
+inputs:
+- type: RunStarted
+  input:
+    amount: 10
+- after: 60
+  type: TaskOutcomeUnknown
+  task: pay#1.1
+- after: 600
+  type: SignalReceived
+  signal: resolve.pay#1.1
+  payload:
+    outcome: completed
+    result:
+      id: ch_1
+- type: TaskCompleted
+  task: notify#1.1
+  result: {}
+expect:
+  history:
+  - type: RunStarted
+    input:
+      amount: 10
+  - type: NodeEntered
+    node: pay
+  - type: TaskScheduled
+    task: pay#1.1
+    node: pay
+    attempt: 1
+    queue: tool/payments
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskOutcomeUnknown
+    task: pay#1.1
+  - type: SignalReceived
+    signal: resolve.pay#1.1
+    payload:
+      outcome: completed
+      result:
+        id: ch_1
+  - type: NodeEntered
+    node: notify
+  - type: TaskScheduled
+    task: notify#1.1
+    node: notify
+    attempt: 1
+    queue: agent/notifier
+    notBefore: 2026-01-01T00:11:00Z
+  - type: TaskCompleted
+    task: notify#1.1
+    result: {}
+  - type: RunCompleted
+  state:
+    status: Succeeded
+    data:
+      input:
+        amount: 10
+      notify: {}
+      pay:
+        id: ch_1
+    steps: 2
+    visits:
+      notify: 1
+      pay: 1
+    tasks: {}
+    timers: {}
+    waits: {}
+    joinArrivals: {}
+    joinSwallow: {}

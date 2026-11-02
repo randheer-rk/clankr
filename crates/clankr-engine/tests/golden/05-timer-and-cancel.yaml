@@ -1,0 +1,56 @@
+description: A timer schedules and fires; a later cancel stops pending work.
+graph:
+  entrypoint: wait
+  nodes:
+    wait:
+      duration: 5m
+      next: work
+      type: timer
+    work:
+      agentRef: worker
+      type: agent
+inputs:
+- type: RunStarted
+  input: {}
+- after: 300
+  type: TimerFired
+  timer: wait#1
+- after: 10
+  type: RunCancelled
+  reason: operator
+expect:
+  history:
+  - type: RunStarted
+    input: {}
+  - type: NodeEntered
+    node: wait
+  - type: TimerScheduled
+    timer: wait#1
+    node: wait
+    dueAt: 2026-01-01T00:05:00Z
+  - type: TimerFired
+    timer: wait#1
+  - type: NodeEntered
+    node: work
+  - type: TaskScheduled
+    task: work#1.1
+    node: work
+    attempt: 1
+    queue: agent/worker
+    notBefore: 2026-01-01T00:05:00Z
+  - type: RunCancelled
+    reason: operator
+  state:
+    status: Cancelled
+    data:
+      input: {}
+    steps: 2
+    visits:
+      wait: 1
+      work: 1
+    tasks: {}
+    timers: {}
+    waits: {}
+    joinArrivals: {}
+    joinSwallow: {}
+    error: operator

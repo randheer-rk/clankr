@@ -17,6 +17,8 @@ url = "2"
 uuid = { version = "1", features = ["serde"] }
 tracing = "0.1.44"
 chrono = "0.4"
+sha2 = "0.11"
+hex = "0.4"
 
 [dev-dependencies]
 axum = "0.8"

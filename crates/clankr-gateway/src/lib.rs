@@ -20,6 +20,27 @@ pub enum Provider {
     Anthropic,
     /// Deterministic, offline; for tests and `clank dev`.
     Mock,
+    /// Answers from `script` only (golden traces); an unscripted prompt is an error, so
+    /// evaluations notice when an agent's prompts drift.
+    Replay,
+}
+
+/// One scripted response for the replay provider. Matched by exact prompt hash when given,
+/// else by `contains` (substring of the system prompt and messages).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplayEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contains: Option<String>,
+    pub reply: String,
+    #[serde(default)]
+    pub input_tokens: i64,
+    #[serde(default)]
+    pub output_tokens: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,6 +63,12 @@ pub struct ProviderConnectionSpec {
     /// Per-model prices; needed for any cost budget. Applied price is recorded per call.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pricing: BTreeMap<String, Price>,
+    /// Replay provider only: the recorded responses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script: Vec<ReplayEntry>,
+    /// Store each request and response as a golden trace (stores prompt content; opt-in).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record: bool,
 }
 
 /// USD per million tokens (numerically: micro-USD per token).
@@ -168,7 +195,19 @@ pub fn admit_connection(spec: &serde_json::Value) -> Result<ProviderConnectionSp
     if s.allowed_models.is_empty() {
         return Err(invalid("spec.allowedModels", "list at least one model"));
     }
-    if s.provider != Provider::Mock {
+    match s.provider {
+        Provider::Replay if s.script.is_empty() => return Err(invalid("spec.script", "replay needs at least one scripted response")),
+        Provider::Replay if s.record => return Err(invalid("spec.record", "recording a replay would only copy the script")),
+        Provider::Replay => {}
+        _ if !s.script.is_empty() => return Err(invalid("spec.script", "script is only for the replay provider")),
+        _ => {}
+    }
+    for (i, e) in s.script.iter().enumerate() {
+        if e.prompt_sha256.is_none() && e.contains.is_none() {
+            return Err(invalid(&format!("spec.script[{i}]"), "set promptSha256 or contains"));
+        }
+    }
+    if !matches!(s.provider, Provider::Mock | Provider::Replay) {
         check_endpoint(&s.endpoint)?;
         if s.secret_ref.is_none() {
             return Err(invalid("spec.secretRef", "provider needs a secretRef {name, key}"));
@@ -195,6 +234,14 @@ pub fn admit_claim(spec: &serde_json::Value) -> Result<ModelClaimSpec, ApiError>
         return Err(invalid("spec.limits.maxOutputTokens", "must be > 0"));
     }
     Ok(s)
+}
+
+/// Identity of a prompt for golden traces: system text and messages, nothing else (model,
+/// limits and attribution don't change what the model was asked).
+pub fn prompt_sha256(req: &GenerateRequest) -> String {
+    use sha2::{Digest, Sha256};
+    let canon = serde_json::json!({"system": req.system, "messages": req.messages});
+    hex::encode(Sha256::digest(canon.to_string().as_bytes()))
 }
 
 /// Rough pre-dispatch input estimate (~4 chars/token). Only used to reserve budget;
@@ -302,6 +349,29 @@ impl Gateway {
         .await
         .map_err(clankr_store::db)?;
 
+        if conn.record
+            && let Ok(r) = &result
+        {
+            sqlx::query(
+                "insert into model_traces (namespace, claim, connection, model, run_id, task, prompt_sha256, request, response, input_tokens, output_tokens, stop_reason)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+            )
+            .bind(ns)
+            .bind(claim_name)
+            .bind(&claim.provider_connection)
+            .bind(&claim.model)
+            .bind(req.run_id)
+            .bind(&req.task)
+            .bind(prompt_sha256(&req))
+            .bind(serde_json::json!({"system": req.system, "messages": req.messages, "maxOutputTokens": max_out}))
+            .bind(&r.text)
+            .bind(r.usage.input_tokens)
+            .bind(r.usage.output_tokens)
+            .bind(&r.stop_reason)
+            .execute(self.store.pool())
+            .await
+            .map_err(clankr_store::db)?;
+        }
         let (text, stop_reason, usage) = result.map(|r| (r.text, r.stop_reason, r.usage))?;
         Ok(GenerateResponse { text, stop_reason, usage, provider: conn.provider, model: claim.model, connection: claim.provider_connection })
     }

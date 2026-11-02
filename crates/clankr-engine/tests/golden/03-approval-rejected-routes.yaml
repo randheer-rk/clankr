@@ -1,0 +1,128 @@
+description: A rejected approval takes onReject; the fix step loops back for a second review, which approves.
+graph:
+  entrypoint: draft
+  nodes:
+    draft:
+      agentRef: writer
+      next: review
+      type: agent
+    fix:
+      agentRef: writer
+      maxIterations: 3
+      next: review
+      type: agent
+    review:
+      approverGroup: editors
+      next: ship
+      onReject: fix
+      type: approval
+    ship:
+      toolRef: publisher
+      type: activity
+inputs:
+- type: RunStarted
+  input: {}
+- type: TaskCompleted
+  task: draft#1.1
+  result:
+    text: v1
+- after: 30
+  type: SignalReceived
+  signal: approve.review
+  payload:
+    approved: false
+    comment: tone
+- after: 5
+  type: TaskCompleted
+  task: fix#1.1
+  result:
+    text: v2
+- after: 30
+  type: SignalReceived
+  signal: approve.review
+  payload:
+    approved: true
+- type: TaskCompleted
+  task: ship#1.1
+  result: {}
+expect:
+  history:
+  - type: RunStarted
+    input: {}
+  - type: NodeEntered
+    node: draft
+  - type: TaskScheduled
+    task: draft#1.1
+    node: draft
+    attempt: 1
+    queue: agent/writer
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskCompleted
+    task: draft#1.1
+    result:
+      text: v1
+  - type: NodeEntered
+    node: review
+  - type: WaitStarted
+    signal: approve.review
+    node: review
+  - type: SignalReceived
+    signal: approve.review
+    payload:
+      approved: false
+      comment: tone
+  - type: NodeEntered
+    node: fix
+  - type: TaskScheduled
+    task: fix#1.1
+    node: fix
+    attempt: 1
+    queue: agent/writer
+    notBefore: 2026-01-01T00:00:30Z
+  - type: TaskCompleted
+    task: fix#1.1
+    result:
+      text: v2
+  - type: NodeEntered
+    node: review
+  - type: WaitStarted
+    signal: approve.review
+    node: review
+  - type: SignalReceived
+    signal: approve.review
+    payload:
+      approved: true
+  - type: NodeEntered
+    node: ship
+  - type: TaskScheduled
+    task: ship#1.1
+    node: ship
+    attempt: 1
+    queue: tool/publisher
+    notBefore: 2026-01-01T00:01:05Z
+  - type: TaskCompleted
+    task: ship#1.1
+    result: {}
+  - type: RunCompleted
+  state:
+    status: Succeeded
+    data:
+      draft:
+        text: v1
+      fix:
+        text: v2
+      input: {}
+      review:
+        approved: true
+      ship: {}
+    steps: 5
+    visits:
+      draft: 1
+      fix: 1
+      review: 2
+      ship: 1
+    tasks: {}
+    timers: {}
+    waits: {}
+    joinArrivals: {}
+    joinSwallow: {}

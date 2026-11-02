@@ -18,5 +18,7 @@ base64 = "0.23"
 
 [dev-dependencies]
 axum = "0.8"
+clankr-store = { path = "../clankr-store", features = ["embedded"] }
+clankrd = { path = "../clankrd" }
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

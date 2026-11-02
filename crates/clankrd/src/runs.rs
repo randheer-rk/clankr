@@ -53,6 +53,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/namespaces/{ns}/runs/{id}", get(read))
         .route("/v1/namespaces/{ns}/runs/{id}/history", get(history))
         .route("/v1/namespaces/{ns}/runs/{id}/spend", get(spend))
+        .route("/v1/namespaces/{ns}/runs/{id}/traces", get(traces))
         .route("/v1/namespaces/{ns}/runs/{id}/signal", post(signal))
         .route("/v1/namespaces/{ns}/runs/{id}/cancel", post(cancel))
         .route("/v1/namespaces/{ns}/tasks/lease", post(lease))
@@ -125,6 +126,23 @@ async fn spend(State(s): State<AppState>, Path((ns, id)): Path<(String, String)>
     .await
     .map_err(clankr_store::db)?;
     Ok(Json(serde_json::json!({"calls": calls, "inputTokens": input, "outputTokens": output, "costUSD": cost.map(|c| c as f64 / 1e6)})))
+}
+
+/// Recorded model calls for a run (connections with `record: true`), oldest first: the raw
+/// material for a replay script.
+async fn traces(State(s): State<AppState>, Path((ns, id)): Path<(String, String)>) -> ApiResult<Json<Value>> {
+    let rows: Value = sqlx::query_scalar(
+        "select coalesce(jsonb_agg(jsonb_build_object(
+             'at', at, 'claim', claim, 'model', model, 'task', task, 'promptSha256', prompt_sha256, 'request', request,
+             'response', response, 'inputTokens', input_tokens, 'outputTokens', output_tokens, 'stopReason', stop_reason) order by id), '[]')
+         from model_traces where namespace = $1 and run_id = $2",
+    )
+    .bind(&ns)
+    .bind(run_id(&id)?)
+    .fetch_one(s.store.pool())
+    .await
+    .map_err(clankr_store::db)?;
+    Ok(Json(rows))
 }
 
 #[derive(Deserialize)]

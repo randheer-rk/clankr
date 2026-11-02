@@ -153,6 +153,8 @@ pub fn required(method: &str, path: &str) -> Option<(Option<String>, Perm)> {
         ["v1", "nodes", ..] => (None, NodesManage),
         ["v1", "namespaces", n, "secrets", ..] => (ns(n), if read { SecretsRead } else { SecretsWrite }),
         ["v1", "namespaces", n, "serviceaccounts", _, "tokens", ..] => (ns(n), if read { ResourcesRead } else { RbacWrite }),
+        // recorded prompts and responses can hold anything an agent saw: secret-level access
+        ["v1", "namespaces", n, "runs", _, "traces"] => (ns(n), SecretsRead),
         ["v1", "namespaces", n, "workflows", _, "runs"] | ["v1", "namespaces", n, "runs", ..] => (ns(n), if read { RunsRead } else { RunsWrite }),
         ["v1", "namespaces", n, "approvals", ..] => (ns(n), if read { RunsRead } else { ApprovalsDecide }),
         ["v1", "namespaces", n, "tasks" | "models", ..] => (ns(n), WorkExecute),
@@ -192,6 +194,8 @@ mod tests {
         assert_eq!(r("GET", "/v1/agents"), Some(("".into(), Perm::ResourcesRead)));
         assert_eq!(r("GET", "/v1/audit"), Some(("".into(), Perm::AuditRead)));
         assert_eq!(r("GET", "/v1/whoami"), None);
+        assert_eq!(r("GET", "/v1/namespaces/a/runs/x/traces"), Some(("a".into(), Perm::SecretsRead)));
+        assert_eq!(r("GET", "/v1/namespaces/a/runs/x/history"), Some(("a".into(), Perm::RunsRead)));
     }
 
     #[test]

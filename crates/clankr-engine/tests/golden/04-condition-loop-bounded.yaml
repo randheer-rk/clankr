@@ -1,0 +1,111 @@
+description: A condition loops back until the check passes, bounded by maxIterations.
+graph:
+  entrypoint: attempt
+  nodes:
+    attempt:
+      agentRef: solver
+      maxIterations: 4
+      next: check
+      type: agent
+    check:
+      else: attempt
+      equals: true
+      path: $.attempt.ok
+      then: done
+      type: condition
+    done:
+      toolRef: reporter
+      type: activity
+inputs:
+- type: RunStarted
+  input: {}
+- type: TaskCompleted
+  task: attempt#1.1
+  result:
+    ok: false
+- type: TaskCompleted
+  task: attempt#2.1
+  result:
+    ok: false
+- type: TaskCompleted
+  task: attempt#3.1
+  result:
+    ok: true
+- type: TaskCompleted
+  task: done#1.1
+  result: {}
+expect:
+  history:
+  - type: RunStarted
+    input: {}
+  - type: NodeEntered
+    node: attempt
+  - type: TaskScheduled
+    task: attempt#1.1
+    node: attempt
+    attempt: 1
+    queue: agent/solver
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskCompleted
+    task: attempt#1.1
+    result:
+      ok: false
+  - type: NodeEntered
+    node: check
+  - type: NodeEntered
+    node: attempt
+  - type: TaskScheduled
+    task: attempt#2.1
+    node: attempt
+    attempt: 1
+    queue: agent/solver
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskCompleted
+    task: attempt#2.1
+    result:
+      ok: false
+  - type: NodeEntered
+    node: check
+  - type: NodeEntered
+    node: attempt
+  - type: TaskScheduled
+    task: attempt#3.1
+    node: attempt
+    attempt: 1
+    queue: agent/solver
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskCompleted
+    task: attempt#3.1
+    result:
+      ok: true
+  - type: NodeEntered
+    node: check
+  - type: NodeEntered
+    node: done
+  - type: TaskScheduled
+    task: done#1.1
+    node: done
+    attempt: 1
+    queue: tool/reporter
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskCompleted
+    task: done#1.1
+    result: {}
+  - type: RunCompleted
+  state:
+    status: Succeeded
+    data:
+      attempt:
+        ok: true
+      done: {}
+      input: {}
+    steps: 7
+    visits:
+      attempt: 3
+      check: 3
+      done: 1
+    tasks: {}
+    timers: {}
+    waits: {}
+    joinArrivals: {}
+    joinSwallow: {}

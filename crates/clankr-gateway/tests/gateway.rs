@@ -226,3 +226,46 @@ async fn agent_budgets_and_cost_limits() {
     let e = gw.generate(&ctx(), NS, "c", ask("hi")).await.unwrap_err();
     assert!(e.message.contains("AgentBudget tokens: token budget for month:"), "{}", e.message);
 }
+
+/// Golden traces (CL-34-08): record real calls once, replay them deterministically; a prompt
+/// that changed is an error, not a silent different answer.
+#[tokio::test]
+async fn record_then_replay() {
+    let (_pg, s, gw) = setup().await;
+    s.create(&ctx(), res("ProviderConnection", "live", json!({"provider": "mock", "allowedModels": ["m"], "record": true}))).await.unwrap();
+    s.create(&ctx(), res("ModelClaim", "c", json!({"providerConnection": "live", "model": "m"}))).await.unwrap();
+    let run = uuid::Uuid::new_v4();
+    let mut asks = vec![ask("summarise durable execution"), ask("list three engines")];
+    for a in &mut asks {
+        a.run_id = Some(run);
+    }
+    let mut live = vec![];
+    for a in &asks {
+        live.push(gw.generate(&ctx(), NS, "c", a.clone()).await.unwrap().text);
+    }
+
+    let traces: Vec<(String, String, i64, i64)> =
+        sqlx::query_as("select prompt_sha256, response, input_tokens, output_tokens from model_traces where run_id = $1 order by id").bind(run).fetch_all(s.pool()).await.unwrap();
+    assert_eq!(traces.len(), 2, "both calls recorded");
+    let script: Vec<Value> = traces.iter().map(|(h, r, i, o)| json!({"promptSha256": h, "reply": r, "inputTokens": i, "outputTokens": o})).collect();
+
+    // admission: replay needs a script; scripts need a matcher and belong to replay only
+    assert!(admit_connection(&json!({"provider": "replay", "allowedModels": ["m"]})).is_err());
+    assert!(admit_connection(&json!({"provider": "replay", "allowedModels": ["m"], "script": [{"reply": "x"}]})).is_err());
+    assert!(admit_connection(&json!({"provider": "mock", "allowedModels": ["m"], "script": [{"contains": "a", "reply": "x"}]})).is_err());
+
+    let mut script_with_fallback = script.clone();
+    script_with_fallback.push(json!({"contains": "weather", "reply": "sunny"}));
+    s.create(&ctx(), res("ProviderConnection", "golden", json!({"provider": "replay", "allowedModels": ["m"], "script": script_with_fallback}))).await.unwrap();
+    s.create(&ctx(), res("ModelClaim", "g", json!({"providerConnection": "golden", "model": "m"}))).await.unwrap();
+    for (a, want) in asks.iter().zip(&live) {
+        let r = gw.generate(&ctx(), NS, "g", a.clone()).await.unwrap();
+        assert_eq!(&r.text, want, "replay returns exactly what was recorded");
+    }
+    assert_eq!(gw.generate(&ctx(), NS, "g", ask("what's the weather")).await.unwrap().text, "sunny", "substring rules cover hand-written cases");
+    let e = gw.generate(&ctx(), NS, "g", ask("summarise durable execution, briefly")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidSpec);
+    assert!(e.message.contains("no recorded response"), "{}", e.message);
+    let replayed: i64 = sqlx::query_scalar("select count(*) from model_traces where connection = 'golden'").fetch_one(s.pool()).await.unwrap();
+    assert_eq!(replayed, 0, "replays are not re-recorded");
+}

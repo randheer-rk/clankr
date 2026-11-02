@@ -1,0 +1,121 @@
+description: An any-join fires on the first branch and absorbs the late one.
+graph:
+  entrypoint: start
+  nodes:
+    fast:
+      agentRef: a
+      next: first
+      type: agent
+    finish:
+      toolRef: t
+      type: activity
+    first:
+      mode: any
+      next: finish
+      type: join
+    slow:
+      agentRef: a
+      next: first
+      type: agent
+    start:
+      agentRef: a
+      next:
+      - fast
+      - slow
+      type: agent
+inputs:
+- type: RunStarted
+  input: {}
+- type: TaskCompleted
+  task: start#1.1
+  result: {}
+- type: TaskCompleted
+  task: fast#1.1
+  result: {}
+- type: TaskCompleted
+  task: slow#1.1
+  result: {}
+- type: TaskCompleted
+  task: finish#1.1
+  result: {}
+expect:
+  history:
+  - type: RunStarted
+    input: {}
+  - type: NodeEntered
+    node: start
+  - type: TaskScheduled
+    task: start#1.1
+    node: start
+    attempt: 1
+    queue: agent/a
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskCompleted
+    task: start#1.1
+    result: {}
+  - type: NodeEntered
+    node: fast
+  - type: TaskScheduled
+    task: fast#1.1
+    node: fast
+    attempt: 1
+    queue: agent/a
+    notBefore: 2026-01-01T00:00:00Z
+  - type: NodeEntered
+    node: slow
+  - type: TaskScheduled
+    task: slow#1.1
+    node: slow
+    attempt: 1
+    queue: agent/a
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskCompleted
+    task: fast#1.1
+    result: {}
+  - type: NodeEntered
+    node: first
+  - type: JoinArrived
+    node: first
+  - type: JoinFired
+    node: first
+    swallow: 1
+  - type: NodeEntered
+    node: finish
+  - type: TaskScheduled
+    task: finish#1.1
+    node: finish
+    attempt: 1
+    queue: tool/t
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskCompleted
+    task: slow#1.1
+    result: {}
+  - type: NodeEntered
+    node: first
+  - type: JoinArrived
+    node: first
+  - type: TaskCompleted
+    task: finish#1.1
+    result: {}
+  - type: RunCompleted
+  state:
+    status: Succeeded
+    data:
+      fast: {}
+      finish: {}
+      input: {}
+      slow: {}
+      start: {}
+    steps: 6
+    visits:
+      fast: 1
+      finish: 1
+      first: 2
+      slow: 1
+      start: 1
+    tasks: {}
+    timers: {}
+    waits: {}
+    joinArrivals: {}
+    joinSwallow:
+      first: 0

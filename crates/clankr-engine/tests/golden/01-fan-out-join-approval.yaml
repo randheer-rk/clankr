@@ -1,0 +1,169 @@
+description: Plan fans out to research and verify, an all-join gathers them, an editor approves, publish completes the run.
+graph:
+  entrypoint: plan
+  nodes:
+    gather:
+      next: review
+      type: join
+    plan:
+      agentRef: planner
+      next:
+      - research
+      - verify
+      type: agent
+    publish:
+      toolRef: publisher
+      type: activity
+    research:
+      agentRef: researcher
+      next: gather
+      type: agent
+    review:
+      approverGroup: editors
+      next: publish
+      type: approval
+    verify:
+      agentRef: verifier
+      next: gather
+      type: agent
+inputs:
+- type: RunStarted
+  input:
+    topic: durability
+- after: 5
+  type: TaskCompleted
+  task: plan#1.1
+  result:
+    topics:
+    - a
+    - b
+- after: 30
+  type: TaskCompleted
+  task: verify#1.1
+  result:
+    ok: true
+- after: 10
+  type: TaskCompleted
+  task: research#1.1
+  result:
+    summary: done
+- after: 60
+  type: SignalReceived
+  signal: approve.review
+  payload:
+    approved: true
+    by: user:ed
+- after: 2
+  type: TaskCompleted
+  task: publish#1.1
+  result:
+    url: https://x
+expect:
+  history:
+  - type: RunStarted
+    input:
+      topic: durability
+  - type: NodeEntered
+    node: plan
+  - type: TaskScheduled
+    task: plan#1.1
+    node: plan
+    attempt: 1
+    queue: agent/planner
+    notBefore: 2026-01-01T00:00:00Z
+  - type: TaskCompleted
+    task: plan#1.1
+    result:
+      topics:
+      - a
+      - b
+  - type: NodeEntered
+    node: research
+  - type: TaskScheduled
+    task: research#1.1
+    node: research
+    attempt: 1
+    queue: agent/researcher
+    notBefore: 2026-01-01T00:00:05Z
+  - type: NodeEntered
+    node: verify
+  - type: TaskScheduled
+    task: verify#1.1
+    node: verify
+    attempt: 1
+    queue: agent/verifier
+    notBefore: 2026-01-01T00:00:05Z
+  - type: TaskCompleted
+    task: verify#1.1
+    result:
+      ok: true
+  - type: NodeEntered
+    node: gather
+  - type: JoinArrived
+    node: gather
+  - type: TaskCompleted
+    task: research#1.1
+    result:
+      summary: done
+  - type: NodeEntered
+    node: gather
+  - type: JoinArrived
+    node: gather
+  - type: JoinFired
+    node: gather
+    swallow: 0
+  - type: NodeEntered
+    node: review
+  - type: WaitStarted
+    signal: approve.review
+    node: review
+  - type: SignalReceived
+    signal: approve.review
+    payload:
+      approved: true
+      by: user:ed
+  - type: NodeEntered
+    node: publish
+  - type: TaskScheduled
+    task: publish#1.1
+    node: publish
+    attempt: 1
+    queue: tool/publisher
+    notBefore: 2026-01-01T00:01:45Z
+  - type: TaskCompleted
+    task: publish#1.1
+    result:
+      url: https://x
+  - type: RunCompleted
+  state:
+    status: Succeeded
+    data:
+      input:
+        topic: durability
+      plan:
+        topics:
+        - a
+        - b
+      publish:
+        url: https://x
+      research:
+        summary: done
+      review:
+        approved: true
+        by: user:ed
+      verify:
+        ok: true
+    steps: 7
+    visits:
+      gather: 2
+      plan: 1
+      publish: 1
+      research: 1
+      review: 1
+      verify: 1
+    tasks: {}
+    timers: {}
+    waits: {}
+    joinArrivals: {}
+    joinSwallow:
+      gather: 0

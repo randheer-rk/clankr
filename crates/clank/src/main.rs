@@ -10,6 +10,7 @@ use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde_json::Value;
 
+mod eval;
 mod oidc;
 
 #[derive(Parser)]
@@ -89,6 +90,11 @@ enum Cmd {
     },
     /// Who the server thinks you are.
     Whoami,
+    /// Evaluate a workflow against a dataset and gate on thresholds / a baseline (exit 1 on failure).
+    Eval {
+        #[command(subcommand)]
+        cmd: EvalCmd,
+    },
     /// The approval inbox: what's waiting on a human decision.
     Approvals {
         #[arg(short, long, default_value = "default", global = true)]
@@ -162,6 +168,30 @@ enum MailboxCmd {
     },
     /// Move a dead-lettered message back to ready.
     Requeue { mailbox: String, id: String },
+}
+
+#[derive(Subcommand)]
+enum EvalCmd {
+    /// Run every case in a suite file and score it.
+    Run {
+        suite: PathBuf,
+        /// Write the JSON report here (commit it as the next baseline).
+        #[arg(long)]
+        report: Option<PathBuf>,
+        /// Fail on regressions against this earlier report.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+        /// Token used for autoApprove decisions; must be a different principal from the one
+        /// starting the runs (nobody approves their own run).
+        #[arg(long, env = "CLANKR_EVAL_APPROVER_TOKEN", hide_env_values = true)]
+        approver_token: Option<String>,
+    },
+    /// Print a run's recorded model calls as a replay script (ProviderConnection `script:`).
+    Trace {
+        run: String,
+        #[arg(short, long, default_value = "default")]
+        namespace: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -409,6 +439,20 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Token { namespace, cmd } => token_cmd(&api, &namespace, cmd),
         Cmd::Approvals { namespace, cmd } => approvals_cmd(&api, &namespace, cmd),
+        Cmd::Eval { cmd: EvalCmd::Run { suite, report, baseline, approver_token } } => {
+            let approver = approver_token.map(|token| Api { token, ..api.clone() });
+            eval::run(&api, approver.as_ref().unwrap_or(&api), &suite, report.as_deref(), baseline.as_deref())
+        }
+        Cmd::Eval { cmd: EvalCmd::Trace { run, namespace } } => {
+            let t: Vec<Value> = ok(api.req(reqwest::Method::GET, &format!("/v1/namespaces/{namespace}/runs/{run}/traces")).send()?)?.json()?;
+            anyhow::ensure!(!t.is_empty(), "run {run} has no recorded model calls (record: true on its ProviderConnection?)");
+            let script: Vec<Value> = t
+                .iter()
+                .map(|c| serde_json::json!({"promptSha256": c["promptSha256"], "reply": c["response"], "inputTokens": c["inputTokens"], "outputTokens": c["outputTokens"], "stopReason": c["stopReason"]}))
+                .collect();
+            print!("{}", serde_yaml_ng::to_string(&serde_json::json!({"script": script}))?);
+            Ok(())
+        }
         Cmd::Login { .. } | Cmd::Logout => unreachable!("handled before connecting"),
         Cmd::Usage { namespace, output } => usage(&api, &namespace, output),
         Cmd::Mailbox { namespace, cmd } => mailbox_cmd(&api, &namespace, cmd),
