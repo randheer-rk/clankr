@@ -132,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
         Some(cfg)
     };
     clankrd::spawn_ticker(state.engine.clone());
+    clankrd::spawn_tool_sweeper(state.gateway.clone());
     // every clankrd runs the loop; the Postgres lease makes exactly one of them the scheduler
     let holder = format!("{}-{}", std::fs::read_to_string("/etc/hostname").unwrap_or_default().trim(), std::process::id());
     clankrd::scheduler::spawn(store, holder, std::time::Duration::from_secs(1));

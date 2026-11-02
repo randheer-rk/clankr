@@ -1,0 +1,13 @@
+[package]
+name = "clankr-sandbox"
+description = "Runs tool calls in fresh kennel containers (and stdio MCP servers in them); shared by the gateway and nodes"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clankr-types = { path = "../clankr-types" }
+tokio = { version = "1", features = ["process", "io-util", "time"] }
+uuid = { version = "1", features = ["v4"] }

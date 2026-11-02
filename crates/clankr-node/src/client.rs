@@ -174,6 +174,10 @@ impl Client {
     /// Sends a request; returns the JSON body (Null for 204) or the server's ApiError. Fails over
     /// to another replica only when the connection was never made, so nothing is sent twice.
     async fn call(&self, m: Method, path: &str, body: Option<&Value>, on_behalf_of: Option<&str>) -> Result<Value, ApiError> {
+        self.call_with(m, path, body, on_behalf_of, &[]).await
+    }
+
+    async fn call_with(&self, m: Method, path: &str, body: Option<&Value>, on_behalf_of: Option<&str>, extra: &[(&str, &str)]) -> Result<Value, ApiError> {
         let http = self.http.read().expect("lock").clone();
         let mut last = None;
         for (i, base) in self.servers.order() {
@@ -189,6 +193,9 @@ impl Client {
             }
             if let Some(who) = on_behalf_of {
                 rb = rb.header("x-clankr-on-behalf-of", who);
+            }
+            for (k, v) in extra {
+                rb = rb.header(*k, *v);
             }
             let resp = match rb.send().await {
                 Ok(r) => r,
@@ -225,6 +232,20 @@ impl Client {
 
     pub async fn tool_call(&self, claim: &str, call: &Value, who: &str) -> Result<Value, ApiError> {
         self.call(Method::POST, &format!("/toolclaims/{claim}/call"), Some(call), Some(who)).await
+    }
+
+    /// A tool call offering to run container tools here; the answer is the result, or
+    /// `{"delegate": {...}}` with the work to run and report through `complete_tool`.
+    pub async fn tool_call_on_node(&self, claim: &str, call: &Value, who: &str) -> Result<Value, ApiError> {
+        self.call_with(Method::POST, &format!("/toolclaims/{claim}/call"), Some(call), Some(who), &[("x-clankr-executor", "node")]).await
+    }
+
+    pub async fn complete_tool(&self, call_id: i64, result: Result<Value, String>, duration_ms: i64, who: &str) -> Result<Value, ApiError> {
+        let body = match result {
+            Ok(v) => json!({"output": v, "durationMs": duration_ms}),
+            Err(e) => json!({"error": e, "durationMs": duration_ms}),
+        };
+        self.call(Method::POST, &format!("/toolcalls/{call_id}/complete"), Some(&body), Some(who)).await
     }
 
     /// The namespace's ImagePolicies (name, spec), enforced before every launch.

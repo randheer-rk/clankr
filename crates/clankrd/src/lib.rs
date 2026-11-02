@@ -113,6 +113,21 @@ pub fn spawn_ticker(engine: clankr_engine::Engine) {
     });
 }
 
+/// Settles tool calls delegated to nodes that never reported back (ADR 0028).
+pub fn spawn_tool_sweeper(gateway: clankr_gateway::Gateway) {
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            every.tick().await;
+            match gateway.expire_delegated().await {
+                Ok(0) => {}
+                Ok(n) => tracing::warn!(calls = n, "settled tool calls whose node never reported"),
+                Err(e) => tracing::warn!(error = %e, "tool sweep failed"),
+            }
+        }
+    });
+}
+
 pub fn router(state: AppState) -> Router {
     let v1 = Router::new()
         .route("/v1/audit", get(audit))
@@ -276,6 +291,7 @@ fn node_route_allowed(node: &str, method: &axum::http::Method, path: &str) -> bo
         ["v1", "namespaces", _, "tasks", ..] | ["v1", "namespaces", _, "models", ..] | ["v1", "namespaces", _, "contexts", _, "keys", ..] => true,
         ["v1", "namespaces", _, "instances", _, "checkpoint"] => method == axum::http::Method::POST,
         ["v1", "namespaces", _, "toolclaims", _, "call"] => method == axum::http::Method::POST,
+        ["v1", "namespaces", _, "toolcalls", _, "complete"] => method == axum::http::Method::POST,
         ["v1", "namespaces", _, "mailboxes", _, "messages" | "receive" | "ack" | "nack"] => method == axum::http::Method::POST,
         _ => false,
     }

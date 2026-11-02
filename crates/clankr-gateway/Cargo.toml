@@ -10,6 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 clankr-types = { path = "../clankr-types" }
 clankr-store = { path = "../clankr-store" }
+clankr-sandbox = { path = "../clankr-sandbox" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
 tokio = { version = "1", features = ["time", "process", "io-util"] }

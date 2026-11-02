@@ -498,6 +498,7 @@ dependencies = [
  "axum",
  "chrono",
  "clankr-engine",
+ "clankr-sandbox",
  "clankr-store",
  "clankr-types",
  "futures-util",
@@ -522,6 +523,7 @@ dependencies = [
  "axum",
  "chrono",
  "clankr-engine",
+ "clankr-sandbox",
  "clankr-store",
  "clankr-tls",
  "clankr-types",
@@ -538,6 +540,17 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "clankr-sandbox"
+version = "0.1.0"
+dependencies = [
+ "clankr-types",
+ "serde",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 

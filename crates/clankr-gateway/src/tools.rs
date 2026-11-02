@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+pub use crate::sandbox::{Delegation, Work};
 use crate::sandbox::{Container, admit_container, mcp_http};
 use crate::{Gateway, SecretRef};
 
@@ -166,6 +167,29 @@ pub struct ToolResult {
     pub approval: Option<Uuid>,
 }
 
+/// Where a container tool runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// In the gateway (on the control plane host).
+    Here,
+    /// On the calling node, via `Outcome::Delegated`.
+    Caller,
+}
+
+pub enum Outcome {
+    Done(ToolResult),
+    Delegated(Delegation),
+}
+
+enum Ran {
+    Finished(Result<Value, ApiError>),
+    TimedOut,
+}
+
+fn tool_failed(msg: String) -> ApiError {
+    ApiError::new(ErrorCode::ProviderUnavailable, msg)
+}
+
 fn invalid(field: &str, msg: impl Into<String>) -> ApiError {
     ApiError::new(ErrorCode::InvalidSpec, msg).field(field)
 }
@@ -278,6 +302,16 @@ impl Gateway {
     /// One tool call, end to end. See the module doc for the checks, in order.
     #[tracing::instrument(name = "tool.call", skip(self, ctx, call), fields(claim, tool = %call.tool, method = %call.method, actor = %ctx.actor, outcome = tracing::field::Empty))]
     pub async fn call_tool(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, call: ToolCall) -> Result<ToolResult, ApiError> {
+        match self.call_tool_at(ctx, ns, claim_name, call, Placement::Here).await? {
+            Outcome::Done(r) => Ok(r),
+            Outcome::Delegated(_) => unreachable!("only Placement::Caller delegates"),
+        }
+    }
+
+    /// Like `call_tool`, but with `Placement::Caller` a container tool (`sandbox`, `mcpStdio`)
+    /// isn't run here: every check passes and the key is claimed, then the work goes back to the
+    /// caller (a node), which runs it and reports through `complete_delegated`.
+    pub async fn call_tool_at(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, call: ToolCall, at: Placement) -> Result<Outcome, ApiError> {
         let claim = admit_tool_claim(&self.store.get(ns, "ToolClaim", claim_name).await?.spec)?;
         let forbid = |m: String| ApiError::new(ErrorCode::Forbidden, m);
         if claim.deny.iter().any(|g| g.covers(&call.tool, &call.method)) {
@@ -297,7 +331,7 @@ impl Gateway {
 
         // a key we've seen: the recorded outcome, never a second execution
         if let Some(prev) = self.recorded(ns, claim_name, &call.idempotency_key).await? {
-            return prev.into_result(&input_sha);
+            return prev.into_result(&input_sha).map(Outcome::Done);
         }
         if let (Some(max), Some(run)) = (claim.max_calls_per_run, call.run_id) {
             let n: i64 = sqlx::query_scalar("select count(*) from tool_calls where namespace = $1 and claim = $2 and run_id = $3")
@@ -336,20 +370,95 @@ impl Gateway {
         .map_err(db)?;
         let Some(id) = id else {
             return match self.recorded(ns, claim_name, &call.idempotency_key).await? {
-                Some(prev) => prev.into_result(&input_sha),
+                Some(prev) => prev.into_result(&input_sha).map(Outcome::Done),
                 None => Err(forbid("that approval was already used for another call".into())),
             };
         };
 
+        if at == Placement::Caller {
+            let work = match &tool.executor {
+                Executor::Sandbox { container } => Some(Work::Sandbox {
+                    container: container.clone(),
+                    request: json!({"method": call.method, "input": call.input, "idempotencyKey": call.idempotency_key, "runId": call.run_id, "task": call.task}),
+                }),
+                Executor::McpStdio { container } => Some(Work::McpStdio { container: container.clone(), tool: call.method.clone(), arguments: call.input.clone() }),
+                _ => None,
+            };
+            if let Some(work) = work {
+                sqlx::query("update tool_calls set delegated_to = $2, delegated_at = now(), timeout_s = $3, unsafe_effects = $4 where id = $1")
+                    .bind(id)
+                    .bind(&ctx.actor)
+                    .bind(tool.timeout_seconds as i32)
+                    .bind(method.side_effects == Effects::Unsafe)
+                    .execute(self.store.pool())
+                    .await
+                    .map_err(db)?;
+                return Ok(Outcome::Delegated(Delegation { call_id: id, timeout_seconds: tool.timeout_seconds, work }));
+            }
+        }
+
         let started = Instant::now();
-        let outcome = tokio::time::timeout(Duration::from_secs(tool.timeout_seconds), self.execute(ctx, ns, &tool, &call)).await;
+        let outcome = match tokio::time::timeout(Duration::from_secs(tool.timeout_seconds), self.execute(ctx, ns, &tool, &call)).await {
+            Ok(r) => Ran::Finished(r),
+            Err(_) => Ran::TimedOut,
+        };
         let ms = started.elapsed().as_millis() as i64;
+        self.finish(ctx, ns, id, &call.tool, &call.method, &tool, method.side_effects, needs_approval || method.side_effects == Effects::Unsafe, approval, outcome, ms).await.map(Outcome::Done)
+    }
+
+    /// The caller's node reporting a delegated call (`output` or an error message), measured
+    /// on the node. Only the node that took the call may report it, once, within its timeout.
+    pub async fn complete_delegated(&self, ctx: &RequestCtx, ns: &str, call_id: i64, result: Result<Value, String>, duration_ms: i64) -> Result<ToolResult, ApiError> {
+        type Row = (String, String, Option<Uuid>, String, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<i32>);
+        let row: Option<Row> = sqlx::query_as(
+            "select tool, method, approval_id, state, delegated_to, delegated_at, timeout_s from tool_calls where id = $1 and namespace = $2",
+        )
+        .bind(call_id)
+        .bind(ns)
+        .fetch_optional(self.store.pool())
+        .await
+        .map_err(db)?;
+        let Some((tool_name, method_name, approval, state, to, at, timeout_s)) = row else {
+            return Err(ApiError::new(ErrorCode::NotFound, format!("no tool call {call_id}")));
+        };
+        if to.as_deref() != Some(ctx.actor.as_str()) {
+            return Err(ApiError::new(ErrorCode::Forbidden, format!("tool call {call_id} wasn't delegated to {}", ctx.actor)));
+        }
+        if state != "started" {
+            return Err(ApiError::new(ErrorCode::Conflict, format!("tool call {call_id} is already {state}")));
+        }
+        let tool = admit_tool(&self.store.get(ns, "Tool", &tool_name).await?.spec)?;
+        let effects = tool.methods.get(&method_name).map_or(Effects::Unsafe, |m| m.side_effects);
+        let late = at.is_some_and(|t| chrono::Utc::now() - t > chrono::Duration::seconds(timeout_s.unwrap_or(30) as i64));
+        let outcome = if late { Ran::TimedOut } else { Ran::Finished(result.map_err(tool_failed)) };
+        self.finish(ctx, ns, call_id, &tool_name, &method_name, &tool, effects, approval.is_some() || effects == Effects::Unsafe, approval, outcome, duration_ms).await
+    }
+
+    /// Settles delegated calls whose node never reported (gone, partitioned): unsafe ones become
+    /// OutcomeUnknown, the rest are freed for a retry. Returns how many.
+    pub async fn expire_delegated(&self) -> Result<u64, ApiError> {
+        let r = sqlx::query(
+            "with stale as (select id, unsafe_effects from tool_calls where state = 'started' and delegated_at is not null
+                              and delegated_at + make_interval(secs => coalesce(timeout_s, 30) + 30) < now() for update skip locked),
+                  u as (update tool_calls t set state = 'unknown', error = 'the node running it never reported back' from stale s where t.id = s.id and s.unsafe_effects returning t.id),
+                  d as (delete from tool_calls t using stale s where t.id = s.id and not s.unsafe_effects returning t.id)
+             select (select count(*) from u) + (select count(*) from d)",
+        )
+        .fetch_one(self.store.pool())
+        .await
+        .map_err(db)?;
+        Ok(sqlx::Row::get::<i64, _>(&r, 0) as u64)
+    }
+
+    /// Records how a call ended (shared by local and delegated execution).
+    #[allow(clippy::too_many_arguments)]
+    async fn finish(&self, ctx: &RequestCtx, ns: &str, id: i64, tool_name: &str, method_name: &str, tool: &ToolSpec, effects: Effects, audited: bool, approval: Option<Uuid>, outcome: Ran, ms: i64) -> Result<ToolResult, ApiError> {
         let (state, output, err) = match outcome {
-            Ok(Ok(v)) => ("done", Some(v), None),
+            Ran::Finished(Ok(v)) => ("done", Some(v), None),
             // timed out: did the effect happen? for unsafe methods we can't know (OutcomeUnknown)
-            Err(_) if method.side_effects == Effects::Unsafe => ("unknown", None, Some(ApiError::new(ErrorCode::OutcomeUnknown, format!("{}.{} timed out after {}s; it may or may not have taken effect", call.tool, call.method, tool.timeout_seconds)))),
-            Err(_) => ("failed", None, Some(ApiError::new(ErrorCode::ProviderUnavailable, format!("{}.{} timed out", call.tool, call.method)))),
-            Ok(Err(e)) => ("failed", None, Some(e)),
+            Ran::TimedOut if effects == Effects::Unsafe => ("unknown", None, Some(ApiError::new(ErrorCode::OutcomeUnknown, format!("{tool_name}.{method_name} timed out after {}s; it may or may not have taken effect", tool.timeout_seconds)))),
+            Ran::TimedOut => ("failed", None, Some(ApiError::new(ErrorCode::ProviderUnavailable, format!("{tool_name}.{method_name} timed out")))),
+            Ran::Finished(Err(e)) => ("failed", None, Some(e)),
         };
         tracing::Span::current().record("outcome", state);
         let (output, truncated) = output.map_or((Value::Null, false), |v| bound(v, tool.max_output_bytes));
@@ -372,16 +481,16 @@ impl Gateway {
                 .await
                 .map_err(db)?;
         }
-        if needs_approval || method.side_effects == Effects::Unsafe {
-            let target = AuditTarget { kind: "Tool", namespace: ns, name: &call.tool, uid: None };
+        if audited {
+            let target = AuditTarget { kind: "Tool", namespace: ns, name: tool_name, uid: None };
             let reason = approval.map(|a| format!("approval {a}"));
-            audit_in_tx(&mut tx, ctx, &format!("tool {}.{} v{} {state}", call.tool, call.method, tool.version), Some(target), state != "failed", reason.as_deref(), None).await?;
+            audit_in_tx(&mut tx, ctx, &format!("tool {tool_name}.{method_name} v{} {state}", tool.version), Some(target), state != "failed", reason.as_deref(), None).await?;
         }
         tx.commit().await.map_err(db)?;
         if let Some(e) = err {
             return Err(e);
         }
-        Ok(ToolResult { output, output_sha256: output_sha.unwrap_or_default(), truncated, duration_ms: ms, tool_version: tool.version, replayed: false, approval })
+        Ok(ToolResult { output, output_sha256: output_sha.unwrap_or_default(), truncated, duration_ms: ms, tool_version: tool.version.clone(), replayed: false, approval })
     }
 
     /// The approval a high-risk call spends: the named one, or the run's newest granted one

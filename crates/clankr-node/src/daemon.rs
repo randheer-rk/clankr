@@ -266,6 +266,8 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
     let mut lease_fut: Option<LeaseFuture> = None;
     let mut heartbeat = tokio::time::interval(Duration::from_secs((ttl / 3).max(1)));
     let mut draining = false;
+    // container tools this agent calls run here, on its own node (ADR 0028)
+    let sandbox = node_sandbox(cfg);
     let mut hibernate = cfg.hibernate.clone();
     let mut hibernating = hibernate.as_ref().is_some_and(|h| *h.borrow());
 
@@ -333,7 +335,7 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
                         None => tracing::warn!(delivery_id, "agent answered a delivery it doesn't hold; ignored"),
                     },
                     AgentFrame::Call { call_id, op } => {
-                        let reply = match broker(client, spec, &who, busy.as_ref().map(|b| &b.1), op).await {
+                        let reply = match broker(client, spec, &who, busy.as_ref().map(|b| &b.1), sandbox.as_ref(), op).await {
                             Ok(v) => NodeFrame::Reply { call_id, ok: Some(v), error: None },
                             Err(e) => NodeFrame::Reply { call_id, ok: None, error: Some(e) },
                         };
@@ -392,7 +394,7 @@ async fn hibernate_now(
             f = frames.recv() => match f {
                 Some(Ok(AgentFrame::Checkpoint { state })) => break Some(state),
                 Some(Ok(AgentFrame::Call { call_id, op })) => {
-                    let reply = match broker(client, spec, who, None, op).await {
+                    let reply = match broker(client, spec, who, None, node_sandbox(cfg).as_ref(), op).await {
                         Ok(v) => NodeFrame::Reply { call_id, ok: Some(v), error: None },
                         Err(e) => NodeFrame::Reply { call_id, ok: None, error: Some(e) },
                     };
@@ -420,7 +422,7 @@ fn take_if(busy: &mut Option<(u64, Lease)>, delivery_id: u64) -> Option<Lease> {
 
 /// Authorizes and forwards one agent call. The claim must be declared in the Agent spec;
 /// the SDK's view of what's allowed is never trusted (CL-25-08, RTE-18).
-async fn broker(client: &Client, spec: &AgentSpec, who: &str, task: Option<&Lease>, op: CallOp) -> Result<Value, ApiError> {
+async fn broker(client: &Client, spec: &AgentSpec, who: &str, task: Option<&Lease>, sandbox: Option<&clankr_sandbox::Sandbox>, op: CallOp) -> Result<Value, ApiError> {
     let deny = |kind: &str, claim: &str| ApiError::new(ErrorCode::Forbidden, format!("agent is not bound to {kind} {claim:?}"));
     match op {
         CallOp::Generate { claim, mut request } => {
@@ -443,7 +445,26 @@ async fn broker(client: &Client, spec: &AgentSpec, who: &str, task: Option<&Leas
                 obj.insert("runId".into(), l.run_id.clone().into());
                 obj.insert("task".into(), l.task.clone().into());
             }
-            client.tool_call(&claim, &call, who).await
+            let Some(sb) = sandbox else { return client.tool_call(&claim, &call, who).await };
+            let r = client.tool_call_on_node(&claim, &call, who).await?;
+            let Some(d) = r.get("delegate") else { return Ok(r) };
+            // a container tool: the gateway checked everything; run it here, report the outcome
+            let d: clankr_sandbox::Delegation = serde_json::from_value(d.clone()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, format!("delegation: {e}")))?;
+            let policies = client.image_policies().await?;
+            let started = std::time::Instant::now();
+            let run = async {
+                match &d.work {
+                    clankr_sandbox::Work::Sandbox { container, request } => sb.run(container, &policies, request).await,
+                    clankr_sandbox::Work::McpStdio { container, tool, arguments } => sb.mcp(container, &policies, tool, arguments).await,
+                }
+            };
+            let result = match tokio::time::timeout(Duration::from_secs(d.timeout_seconds), run).await {
+                Ok(Ok(v)) => Ok(v),
+                Ok(Err(e)) => Err(e.message),
+                // report late; the gateway settles it as a timeout (OutcomeUnknown if unsafe)
+                Err(_) => Err("timed out on the node".to_owned()),
+            };
+            client.complete_tool(d.call_id, result, started.elapsed().as_millis() as i64, who).await
         }
         CallOp::ContextGet { claim, key } => {
             if !spec.contexts.contains(&claim) {
@@ -502,4 +523,11 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+/// kennel for running container tools on this node, if it's installed.
+fn node_sandbox(cfg: &Config) -> Option<clankr_sandbox::Sandbox> {
+    let k = &cfg.kennel;
+    let found = if k.components().count() > 1 { k.is_file() } else { std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(k).is_file())) };
+    found.then(|| clankr_sandbox::Sandbox { kennel: k.clone(), root: cfg.kennel_root.clone() })
 }

@@ -16,6 +16,7 @@ use clankr_store::secrets::SecretMeta;
 use clankr_types::RequestCtx;
 use serde::Deserialize;
 
+use clankr_gateway::tools::{Outcome, Placement};
 use crate::contexts::writer;
 use crate::{ApiResult, AppState};
 
@@ -25,6 +26,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/namespaces/{ns}/secrets/{name}", get(meta).put(put).delete(remove))
         .route("/v1/namespaces/{ns}/models/{claim}/generate", post(generate))
         .route("/v1/namespaces/{ns}/toolclaims/{claim}/call", post(call_tool))
+        .route("/v1/namespaces/{ns}/toolcalls/{id}/complete", post(complete_tool))
 }
 
 #[derive(Deserialize)]
@@ -67,7 +69,8 @@ async fn call_tool(
     headers: HeaderMap,
     Path((ns, claim)): Path<(String, String)>,
     Json(call): Json<clankr_gateway::tools::ToolCall>,
-) -> ApiResult<Json<clankr_gateway::tools::ToolResult>> {
+) -> ApiResult<axum::response::Response> {
+    use axum::response::IntoResponse;
     let claims = crate::workload(&s, &ctx, &headers, &ns, None).await?;
     // the node already checks this; re-check so a compromised node can't borrow another agent's tools
     if let Some(w) = &claims {
@@ -76,6 +79,41 @@ async fn call_tool(
             return Err(clankr_types::ApiError::new(clankr_types::ErrorCode::Forbidden, format!("agent {} is not bound to ToolClaim {claim:?}", w.agent)).into());
         }
     }
+    // a node that can run containers takes container tools itself (ADR 0028)
+    // only trusted executors may (their reported results are recorded as the outcome): nodes
+    // under a workload identity, or a standalone node running with the break-glass owner token
+    let trusted = claims.is_some() || ctx.actor == "owner";
+    let at = if trusted && headers.get("x-clankr-executor").is_some_and(|v| v == "node") { Placement::Caller } else { Placement::Here };
     let ctx = RequestCtx { actor: writer(&ctx, &headers, claims.as_ref()), ..ctx };
-    Ok(Json(s.gateway.call_tool(&ctx, &ns, &claim, call).await?))
+    Ok(match s.gateway.call_tool_at(&ctx, &ns, &claim, call, at).await? {
+        Outcome::Done(r) => Json(r).into_response(),
+        Outcome::Delegated(d) => (axum::http::StatusCode::ACCEPTED, Json(serde_json::json!({"delegate": d}))).into_response(),
+    })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CompleteBody {
+    #[serde(default)]
+    output: Option<serde_json::Value>,
+    #[serde(default)]
+    error: Option<String>,
+    duration_ms: i64,
+}
+
+/// The node reporting a tool call it ran for one of its agents.
+async fn complete_tool(
+    State(s): State<AppState>,
+    Extension(ctx): Extension<RequestCtx>,
+    headers: HeaderMap,
+    Path((ns, id)): Path<(String, i64)>,
+    Json(b): Json<CompleteBody>,
+) -> ApiResult<Json<clankr_gateway::tools::ToolResult>> {
+    let claims = crate::workload(&s, &ctx, &headers, &ns, None).await?;
+    let ctx = RequestCtx { actor: writer(&ctx, &headers, claims.as_ref()), ..ctx };
+    let result = match b.error {
+        Some(e) => Err(e),
+        None => Ok(b.output.unwrap_or(serde_json::Value::Null)),
+    };
+    Ok(Json(s.gateway.complete_delegated(&ctx, &ns, id, result, b.duration_ms).await?))
 }
