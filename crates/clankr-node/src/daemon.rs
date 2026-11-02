@@ -347,6 +347,17 @@ async fn broker(client: &Client, spec: &AgentSpec, who: &str, task: Option<&Leas
             }
             client.generate(&claim, &request, who).await
         }
+        CallOp::ToolCall { claim, mut call } => {
+            if !spec.tools.contains(&claim) {
+                return Err(deny("ToolClaim", &claim));
+            }
+            // attribution, per-run limits and approvals belong to the task being worked on
+            if let (Some(l), Some(obj)) = (task, call.as_object_mut()) {
+                obj.insert("runId".into(), l.run_id.clone().into());
+                obj.insert("task".into(), l.task.clone().into());
+            }
+            client.tool_call(&claim, &call, who).await
+        }
         CallOp::ContextGet { claim, key } => {
             if !spec.contexts.contains(&claim) {
                 return Err(deny("ContextClaim", &claim));

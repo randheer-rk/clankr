@@ -281,3 +281,46 @@ async fn agents_exchange_messages_through_a_durable_mailbox() {
     let left = e.store.mailbox_list(NS, "jobs", None, 10).await.unwrap();
     assert!(left.iter().all(|m| m.state == "acked"));
 }
+
+/// Tools through the SDK (CL-28-06): the default idempotency key is stable across attempts, so a
+/// task that crashes after a tool call gets the recorded result on retry instead of repeating
+/// the effect; a claim the Agent isn't bound to is refused by the node.
+#[tokio::test(flavor = "multi_thread")]
+async fn tool_calls_replay_across_task_retries() {
+    let e = env().await;
+    e.apply("Tool", "lookup", json!({"version": "1", "executor": {"type": "mock", "responses": {"query": {"answer": 42}}}, "methods": {"query": {}}})).await;
+    e.apply("ToolClaim", "search", json!({"allow": [{"tool": "lookup"}]})).await;
+    e.apply("ToolClaim", "forbidden", json!({"allow": [{"tool": "lookup"}]})).await;
+    e.agent(
+        "toolish",
+        r#"
+from clankr import AgentApp, ClankrError
+app = AgentApp()
+@app.task()
+async def work(task, ctx):
+    r = await ctx.tools.call("search", "lookup", "query", {"q": task.input["input"]["q"]})
+    denied = None
+    try:
+        await ctx.tools.call("forbidden", "lookup", "query", {})
+    except ClankrError as err:
+        denied = err.code
+    if task.attempt == 1:
+        raise RuntimeError("crashed after the tool call")
+    return {"output": r["output"], "replayed": r["replayed"], "denied": denied}
+app.run()
+"#,
+        json!({"tools": ["search"]}),
+    )
+    .await;
+    e.apply("Workflow", "w", json!({"entrypoint": "work", "nodes": {"work": {"type": "agent", "agentRef": "toolish"}}})).await;
+    let stop = e.node("toolish");
+    let engine = clankr_engine::Engine::new(e.store.clone());
+    let run = engine.start(&ctx(), NS, "w", json!({"q": "life"}), None).await.unwrap().run_id;
+    let v = e.wait_terminal(run).await;
+    stop.send(true).unwrap();
+    assert_eq!(v.status, clankr_engine::RunStatus::Succeeded, "{:?}", v.state.error);
+    assert_eq!(v.state.data["work"], json!({"output": {"answer": 42}, "replayed": true, "denied": "Forbidden"}));
+    let calls: Vec<(String, Option<uuid::Uuid>)> = sqlx::query_as("select idempotency_key, run_id from tool_calls").fetch_all(e.store.pool()).await.unwrap();
+    assert_eq!(calls.len(), 1, "executed once across two attempts: {calls:?}");
+    assert_eq!(calls[0].1, Some(run), "attributed to the run");
+}

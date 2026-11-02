@@ -24,6 +24,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/namespaces/{ns}/secrets", get(list))
         .route("/v1/namespaces/{ns}/secrets/{name}", get(meta).put(put).delete(remove))
         .route("/v1/namespaces/{ns}/models/{claim}/generate", post(generate))
+        .route("/v1/namespaces/{ns}/toolclaims/{claim}/call", post(call_tool))
 }
 
 #[derive(Deserialize)]
@@ -58,4 +59,23 @@ async fn generate(
     let claims = crate::workload(&s, &ctx, &headers, &ns, None).await?;
     let ctx = RequestCtx { actor: writer(&ctx, &headers, claims.as_ref()), ..ctx };
     Ok(Json(s.gateway.generate(&ctx, &ns, &claim, req).await?))
+}
+
+async fn call_tool(
+    State(s): State<AppState>,
+    Extension(ctx): Extension<RequestCtx>,
+    headers: HeaderMap,
+    Path((ns, claim)): Path<(String, String)>,
+    Json(call): Json<clankr_gateway::tools::ToolCall>,
+) -> ApiResult<Json<clankr_gateway::tools::ToolResult>> {
+    let claims = crate::workload(&s, &ctx, &headers, &ns, None).await?;
+    // the node already checks this; re-check so a compromised node can't borrow another agent's tools
+    if let Some(w) = &claims {
+        let agent = clankr_types::agent::admit_agent(&s.store.get(&ns, "Agent", &w.agent).await?.spec)?;
+        if !agent.tools.contains(&claim) {
+            return Err(clankr_types::ApiError::new(clankr_types::ErrorCode::Forbidden, format!("agent {} is not bound to ToolClaim {claim:?}", w.agent)).into());
+        }
+    }
+    let ctx = RequestCtx { actor: writer(&ctx, &headers, claims.as_ref()), ..ctx };
+    Ok(Json(s.gateway.call_tool(&ctx, &ns, &claim, call).await?))
 }

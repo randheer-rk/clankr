@@ -270,6 +270,7 @@ fn node_route_allowed(node: &str, method: &axum::http::Method, path: &str) -> bo
         // public keys and repository rules the node enforces at launch
         ["v1", "namespaces", _, "imagepolicies"] => method == axum::http::Method::GET,
         ["v1", "namespaces", _, "tasks", ..] | ["v1", "namespaces", _, "models", ..] | ["v1", "namespaces", _, "contexts", ..] => true,
+        ["v1", "namespaces", _, "toolclaims", _, "call"] => method == axum::http::Method::POST,
         ["v1", "namespaces", _, "mailboxes", _, "messages" | "receive" | "ack" | "nack"] => method == axum::http::Method::POST,
         _ => false,
     }
@@ -336,6 +337,8 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "AgentMailbox" => clankr_types::agent::admit_mailbox(&r.spec).map(drop),
         "AgentImage" => clankr_types::agent::admit_agent_image(&r.spec).map(drop),
         "ImagePolicy" => clankr_types::agent::admit_image_policy(&r.spec).map(drop),
+        "Tool" => clankr_gateway::tools::admit_tool(&r.spec).map(drop),
+        "ToolClaim" => clankr_gateway::tools::admit_tool_claim(&r.spec).map(drop),
         "RoleBinding" => clankr_types::rbac::admit_role_binding(&r.spec).map(drop),
         "ServiceAccount" => clankr_types::rbac::admit_service_account(&r.spec).map(drop),
         "ResourceQuota" => clankr_types::quota::admit_resource_quota(&r.spec).map(drop),

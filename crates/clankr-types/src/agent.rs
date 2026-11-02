@@ -16,6 +16,9 @@ pub struct AgentSpec {
     /// ContextClaims this agent may read/write.
     #[serde(default)]
     pub contexts: Vec<String>,
+    /// ToolClaims this agent may call tools through.
+    #[serde(default)]
+    pub tools: Vec<String>,
     /// Lease TTL for this agent's tasks; the node heartbeats at a third of it.
     #[serde(default = "default_ttl")]
     pub task_ttl_seconds: u64,

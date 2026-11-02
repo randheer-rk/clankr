@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 mod providers;
+pub mod tools;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -218,7 +219,7 @@ pub fn admit_connection(spec: &serde_json::Value) -> Result<ProviderConnectionSp
 
 /// https only, except plain http to loopback for local inference servers.
 // ponytail: no DNS-level private-range blocking yet (SEC-13); the endpoint is operator-set, not agent-set
-fn check_endpoint(endpoint: &str) -> Result<(), ApiError> {
+pub(crate) fn check_endpoint(endpoint: &str) -> Result<(), ApiError> {
     let u = url::Url::parse(endpoint).map_err(|e| invalid("spec.endpoint", format!("bad url: {e}")))?;
     let loopback = matches!(u.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
     match u.scheme() {

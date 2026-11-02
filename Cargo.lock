@@ -497,6 +497,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "clankr-engine",
  "clankr-store",
  "clankr-types",
  "futures-util",

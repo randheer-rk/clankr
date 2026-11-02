@@ -211,6 +211,10 @@ impl Client {
         serde_json::from_value(v).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, e.to_string()))
     }
 
+    pub async fn tool_call(&self, claim: &str, call: &Value, who: &str) -> Result<Value, ApiError> {
+        self.call(Method::POST, &format!("/toolclaims/{claim}/call"), Some(call), Some(who)).await
+    }
+
     /// The namespace's ImagePolicies (name, spec), enforced before every launch.
     pub async fn image_policies(&self) -> Result<Vec<(String, clankr_types::agent::ImagePolicySpec)>, ApiError> {
         let v = self.call(Method::GET, "/imagepolicies", None, None).await?;

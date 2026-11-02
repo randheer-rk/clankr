@@ -23,6 +23,7 @@ $CLANKR_SOCKET, and the node checks every call against the Agent spec.
 """
 
 import asyncio
+import contextvars
 import json
 import os
 import struct
@@ -118,6 +119,33 @@ class _Models:
         return await self._calls.call({"op": "generate", "claim": claim, "request": req})
 
 
+# the task a coroutine is working on, so ctx.tools can derive stable idempotency keys
+_current: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("clankr_task", default=None)
+
+
+class _Tools:
+    def __init__(self, calls: "_Calls"):
+        self._calls = calls
+
+    async def call(self, claim: str, tool: str, method: str, input: Any = None, idempotency_key: Optional[str] = None, approval: Optional[str] = None) -> dict:
+        """Calls tool.method through a ToolClaim. Returns {"output", "outputSha256", "truncated",
+        "durationMs", "toolVersion", "replayed"}. The default idempotency key is derived from the
+        task and the call's position in it, so a retried task gets the recorded result instead
+        of repeating the effect. High-risk methods spend an approval granted earlier in the run.
+        Raises ClankrError: Forbidden (not granted / no approval), InvalidSpec (bad input),
+        OutcomeUnknown (an unsafe call timed out; don't blindly retry)."""
+        cur = _current.get()
+        if idempotency_key is None:
+            if cur is None:
+                raise ClankrError("InvalidSpec", "pass idempotency_key when calling tools outside a task")
+            cur["n"] += 1
+            idempotency_key = f"{cur['task'].idempotency_key}:{tool}.{method}:{cur['n']}"
+        body: dict = {"tool": tool, "method": method, "input": input if input is not None else {}, "idempotencyKey": idempotency_key}
+        if approval is not None:
+            body["approval"] = approval
+        return await self._calls.call({"op": "toolCall", "claim": claim, "call": body})
+
+
 class _ContextClaim:
     def __init__(self, calls: _Calls, claim: str):
         self._calls, self.claim = calls, claim
@@ -183,6 +211,7 @@ class Context:
         self.agent = welcome["agent"]
         self.instance = welcome["instance"]
         self.models = _Models(calls)
+        self.tools = _Tools(calls)
 
     def context(self, claim: str) -> _ContextClaim:
         return _ContextClaim(self._calls, claim)
@@ -244,6 +273,7 @@ class AgentApp:
 
     async def _handle(self, conn: _Conn, ctx: Context, d: dict) -> None:
         task = Task(d["runId"], d["task"], d["node"], d["attempt"], d["idempotencyKey"], d["input"])
+        _current.set({"task": task, "n": 0})
         fn = self.handlers.get(task.node) or self.handlers.get("*")
         try:
             if fn is None:
