@@ -20,6 +20,8 @@ use crate::client::{Client, Lease};
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Where the instance socket dir is mounted inside OCI containers.
 const CONTAINER_SOCKET_DIR: &str = "/run/clankr";
+/// In a microVM: under /tmp, the guest's only writable place.
+const VM_SOCKET_DIR: &str = "/tmp/clankr";
 const LEASE_WAIT_SECS: u64 = 20;
 
 type LeaseFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Lease>, ApiError>> + Send>>;
@@ -173,12 +175,26 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
                 c.arg("--root").arg(root);
             }
             let r = &spec.resources;
+            let vm = *class == clankr_types::agent::SandboxClass::Microvm;
+            // containers bind-mount the socket dir; a microVM gets each socket over vsock, in
+            // its writable /tmp
+            let sock_dir = if vm { VM_SOCKET_DIR } else { CONTAINER_SOCKET_DIR };
             c.args(["run", "--runtime", class.kennel_arg(), "--network", "none", "--name", &cfg.instance])
-                .args(["--memory", &r.memory_mib.to_string(), "--cpus", &r.cpus.to_string(), "--pids", &r.pids.to_string(), "-v"])
-                .arg(format!("{}:{CONTAINER_SOCKET_DIR}", dir.display()))
-                .args(["-e", &format!("CLANKR_SOCKET={CONTAINER_SOCKET_DIR}/agent.sock")])
+                .args(["--memory", &r.memory_mib.to_string(), "--cpus", &r.cpus.to_string(), "--pids", &r.pids.to_string()])
+                .args(["-e", &format!("CLANKR_SOCKET={sock_dir}/agent.sock")])
                 .args(["-e", &format!("CLANKR_AGENT={}", cfg.agent)])
                 .args(["-e", &format!("CLANKR_NAMESPACE={}", cfg.namespace)]);
+            if vm {
+                if !volumes.is_empty() {
+                    bail!("refusing to launch: the microvm runtime doesn't support volumes yet");
+                }
+                c.arg("--socket").arg(format!("{sock_dir}/agent.sock={}", sock.display()));
+                if egress.is_some() {
+                    c.arg("--socket").arg(format!("{sock_dir}/egress.sock={}", dir.join("egress.sock").display()));
+                }
+            } else {
+                c.arg("-v").arg(format!("{}:{CONTAINER_SOCKET_DIR}", dir.display()));
+            }
             for (host, mount, ro) in &volumes {
                 c.arg("-v").arg(format!("{}:{mount}{}", host.display(), if *ro { ":ro" } else { "" }));
             }
@@ -188,7 +204,7 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
             if egress.is_some() {
                 let port = crate::egress::CONTAINER_PORT;
                 let proxy = format!("http://127.0.0.1:{port}");
-                c.arg("--forward").arg(format!("{port}={CONTAINER_SOCKET_DIR}/egress.sock"));
+                c.arg("--forward").arg(format!("{port}={sock_dir}/egress.sock"));
                 for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
                     c.args(["-e", &format!("{k}={proxy}")]);
                 }

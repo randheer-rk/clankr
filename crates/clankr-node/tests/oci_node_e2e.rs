@@ -51,6 +51,33 @@ app.run()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn typescript_agent_runs_from_the_node_base_image() {
+    run_agent("container").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_same_agent_runs_under_gvisor() {
+    if !std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("runsc").is_file())) {
+        eprintln!("SKIPPED: runsc (gVisor) not installed");
+        return;
+    }
+    run_agent("gvisor").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_same_agent_runs_in_a_microvm() {
+    let kernel = std::env::var_os("KENNEL_VM_KERNEL").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/kennel-vmlinuz"))).filter(|k| k.is_file());
+    let fc = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("firecracker").is_file()));
+    let (Some(kernel), true) = (kernel, fc) else {
+        eprintln!("SKIPPED: needs firecracker and a guest kernel (KENNEL_VM_KERNEL or ~/.local/share/kennel-vmlinuz)");
+        return;
+    };
+    // kennel (started by the node) picks the kernel up from the environment
+    unsafe { std::env::set_var("KENNEL_VM_KERNEL", kernel) };
+    run_agent("microvm").await;
+}
+
+/// The agent under kennel runtime class `class`; everything it checks must hold for each.
+async fn run_agent(class: &str) {
     let kbin = std::env::var_os("KENNEL").map(PathBuf::from).unwrap_or_else(|| repo().join("../kennel/target/debug/kennel"));
     if !kbin.exists() {
         eprintln!("SKIPPED: kennel binary not found (build ~/Dev/rust/kennel or set KENNEL)");
@@ -99,7 +126,7 @@ async fn typescript_agent_runs_from_the_node_base_image() {
     for r in [
         res("ProviderConnection", "mock", json!({"provider": "mock", "allowedModels": ["mock-1"]})),
         res("ModelClaim", "default", json!({"providerConnection": "mock", "model": "mock-1"})),
-        res("Agent", "writer", json!({"runtime": {"type": "oci", "image": pinned}, "models": ["default"], "egress": [format!("127.0.0.2:{up_port}")], "taskTtlSeconds": 30, "resources": {"memoryMiB": 256, "cpus": 0.5, "pids": 64}})),
+        res("Agent", "writer", json!({"runtime": {"type": "oci", "image": pinned, "class": class}, "models": ["default"], "egress": [format!("127.0.0.2:{up_port}")], "taskTtlSeconds": 30, "resources": {"memoryMiB": 256, "cpus": 0.5, "pids": 64}})),
         res("Workflow", "wf", json!({"entrypoint": "write", "nodes": {"write": {"type": "agent", "agentRef": "writer"}}})),
     ] {
         store.create(&rctx, r).await.unwrap();
@@ -109,7 +136,7 @@ async fn typescript_agent_runs_from_the_node_base_image() {
         agent: "writer".into(),
         namespace: NS.into(),
         work_dir: tmp.path().join("node"),
-        instance: format!("writer-{}", std::process::id()),
+        instance: format!("writer-{class}-{}", std::process::id()),
         kennel: kbin.clone(),
         kennel_root: Some(kroot.clone()),
         ready: None,

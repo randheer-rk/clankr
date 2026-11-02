@@ -12,11 +12,7 @@ Status: accepted (2026-11-02)
 
 **Policy.** `ImagePolicy.runtimeClasses` lists the classes a namespace allows. For example, `[microvm]` for tenants running untrusted code. It's enforced when an Agent is saved, at node launch, and for sandboxed tools (`container.runtime` on `sandbox`/`mcpStdio` tools).
 
-**Status of verification on the dev host.**
-- `container` is covered end to end.
-- `gvisor` is implemented, but `runsc` isn't installed, so its test skips.
-- `microvm`'s disk build and init injection were checked by hand, and its error paths are tested. The boot test runs once `KENNEL_VM_KERNEL` points at a kernel. The host's `/boot/vmlinuz` is root-only, so it needs one `sudo install` (kennel README).
+**Verified on the dev host (2026-11-03).** The same TypeScript agent runs end to end under all three classes (`oci_node_e2e`): model calls through the node, read-only root, no network, running as nobody, and egress only to listed hosts.
 
-**Limits.**
-- `gvisor` refuses resource limits, because rootless runsc can't enforce them.
-- `microvm` has no volumes, stdin or host networking yet, so agents (which need the node socket) can't use it until a vsock bridge exists. Today it serves sandboxed tools and batch work.
+- **gVisor:** `runsc` runs with its own user namespace and `--host-uds=open` for the node socket. `--memory/--cpus` cap the whole sandbox through a `systemd-run --user` scope. On Ubuntu it needs kennel's `runsc-local` AppArmor profile.
+- **microVM:** Firecracker boots the host's kernel in about 1.2 s. The node socket and the egress socket reach the guest over vsock (`kennel run --socket`); kennel puts the host's vsock modules on the disk, and init loads them. Volumes and stdin aren't supported in VMs yet.
