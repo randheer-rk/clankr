@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Ban, Check, CircleSlash, Clock, Coins, GitBranch, Hand, LoaderCircle, RefreshCw, Search, Workflow, X } from 'lucide-react'
-import { api, ns, type Approval, type HistoryEntry, type Run, type Spend, type Usage } from '../api'
+import { api, ns, type Approval, type HistoryEntry, type Run, type Spend, type ToolCall, type Usage } from '../api'
 import { useApp } from '../App'
 import { Flow } from '../Flow'
-import { actorName, ago, clock, compact, describe, isToday, money, retries, runDuration, runTitle, shortId, subjectParts, summary, titleCase, tone, until, usePoll } from '../lib'
+import { actorName, ago, clock, compact, describe, duration, isToday, money, retries, runDuration, runTitle, shortId, subjectParts, summary, titleCase, tone, until, usePoll } from '../lib'
 
 const statusIcon = (r: Run, needsMe: boolean) => {
   const s = summary(r)
@@ -53,11 +53,12 @@ export function Runs({ id, go, runs, error, reload }: { id?: string; go: (to: st
 
 function RunDetail({ runId, onChange }: { runId: string; onChange: () => void }) {
   const { ns: n, refresh, mine } = useApp()
-  const [tab, setTab] = useState<'overview' | 'history' | 'data' | 'cost'>('overview')
+  const [tab, setTab] = useState<'overview' | 'history' | 'tools' | 'data' | 'cost'>('overview')
   const run = usePoll(() => api<Run>(`${ns(n)}/runs/${runId}`), [n, runId], 3000)
   const history = usePoll(() => api<HistoryEntry[]>(`${ns(n)}/runs/${runId}/history`), [n, runId], 3000)
   const spend = usePoll(() => api<Spend>(`${ns(n)}/runs/${runId}/spend`), [n, runId], 10000)
   const approvals = usePoll(() => api<Approval[]>(`${ns(n)}/approvals?state=pending`), [n, runId], 3000)
+  const tools = usePoll(() => (tab === 'tools' ? api<ToolCall[]>(`${ns(n)}/runs/${runId}/toolcalls`) : Promise.resolve(undefined)), [n, runId, tab], 4000)
   const r = run.data
   if (!r) return <section className="detail"><div className="empty">{run.error ?? 'Loading…'}</div></section>
   const s = summary(r)
@@ -72,7 +73,7 @@ function RunDetail({ runId, onChange }: { runId: string; onChange: () => void })
     <section className="detail">
       <div className="tb">
         <div className="seg">
-          {(['overview', 'history', 'data', 'cost'] as const).map(t => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{titleCase(t)}</button>)}
+          {(['overview', 'history', 'tools', 'data', 'cost'] as const).map(t => <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{titleCase(t)}</button>)}
         </div>
         {r.status === 'Running' && <button className="ibtn" title="Cancel run" onClick={cancel}><Ban /></button>}
       </div>
@@ -104,6 +105,7 @@ function RunDetail({ runId, onChange }: { runId: string; onChange: () => void })
           </>
         )}
         {tab === 'history' && <div className="card" style={{ marginTop: 16 }}><h3>History<span>{history.data?.length ?? 0} events · append-only</span></h3><Activity history={history.data} raw /></div>}
+        {tab === 'tools' && <div className="card" style={{ marginTop: 16 }}><h3>Tool calls<span>{tools.data?.length ?? 0} calls · outputs are sanitized and bounded</span></h3><ToolCalls calls={tools.data} error={tools.error} /></div>}
         {tab === 'data' && <div style={{ marginTop: 16 }}><pre className="json">{JSON.stringify(r.state.data, null, 2)}</pre></div>}
         {tab === 'cost' && (
           <div className="grid2">
@@ -194,5 +196,28 @@ function ApprovalBanner({ a, onDone }: { a: Approval; onDone: () => void }) {
       </div>
       {canDecide && <div className="btns"><button className="b sec" disabled={busy} onClick={() => decide(false)}>Send back</button><button className="b pri" disabled={busy} onClick={() => decide(true)}>Approve</button></div>}
     </div>
+  )
+}
+
+function ToolCalls({ calls, error }: { calls?: ToolCall[]; error?: string }) {
+  const [open, setOpen] = useState<number>()
+  if (error) return <p className="err">{error}</p>
+  if (!calls) return <div className="empty">Loading…</div>
+  if (!calls.length) return <p className="muted" style={{ marginTop: 8 }}>This run hasn't called any tools.</p>
+  const label: Record<string, [string, string]> = { started: ['run', 'Running'], done: ['ok', 'Done'], unknown: ['wait', 'Outcome unknown'] }
+  return (
+    <table className="t"><tbody>
+      {calls.map((c, i) => (
+        <Fragment key={i}>
+          <tr style={{ cursor: 'pointer' }} onClick={() => setOpen(open === i ? undefined : i)}>
+            <td style={{ width: 90 }} className="faint">{clock(c.at)}</td>
+            <td><b style={{ fontWeight: 500 }}>{c.tool}</b><span className="faint"> · {c.method} · v{c.toolVersion}</span><div className="faint" style={{ fontSize: 12 }}>task {c.task}{c.approval ? ' · approved' : ''}{c.truncated ? ' · output truncated' : ''}</div></td>
+            <td style={{ width: 80 }} className="faint">{c.durationMs != null ? duration(c.durationMs) : ''}</td>
+            <td style={{ width: 130, textAlign: 'right' }}><span className={`pill ${(label[c.state] ?? ['off'])[0]}`}>{(label[c.state] ?? [, c.state])[1]}</span></td>
+          </tr>
+          {open === i && <tr><td colSpan={4}>{c.error && <div className="err" style={{ marginTop: 0 }}>{c.error}</div>}<pre className="json">{JSON.stringify(c.output ?? null, null, 2)}</pre></td></tr>}
+        </Fragment>
+      ))}
+    </tbody></table>
   )
 }

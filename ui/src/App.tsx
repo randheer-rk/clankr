@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { Bot, CirclePlay, Gauge, Inbox as InboxIcon, LogOut, Plus, Sparkles, Workflow } from 'lucide-react'
+import { Bot, CirclePlay, Gauge, ScrollText, Users, Inbox as InboxIcon, LogOut, Plus, Sparkles, Workflow } from 'lucide-react'
 import { api, getToken, ns, setToken, type Approval, type Principal, type Run } from './api'
 import { titleCase, usePoll } from './lib'
 import { Inbox } from './pages/Inbox'
@@ -7,6 +7,8 @@ import { Runs } from './pages/Runs'
 import { Budgets } from './pages/Budgets'
 import { Agents, Workflows } from './pages/Resources'
 import { Login } from './pages/Login'
+import { Access } from './pages/Access'
+import { Audit } from './pages/Audit'
 
 export interface Ctx {
   ns: string
@@ -78,7 +80,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
 
   return (
     <AppCtx.Provider value={ctx}>
-      <div className={`app ${page === 'budgets' ? '' : 'three'}`}>
+      <div className={`app ${['budgets', 'access', 'audit'].includes(page) ? '' : 'three'}`}>
         <aside className="side">
           <div className="ws"><div className="logo"><Bot /></div><div><b>{titleCase(current)}</b><span>clankr</span></div></div>
           {nav('inbox', 'Inbox', <InboxIcon />, ctx.mine.length, true)}
@@ -87,6 +89,8 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
           {nav('workflows', 'Workflows', <Workflow />)}
           <div className="grp">Govern</div>
           {nav('budgets', 'Budgets', <Gauge />)}
+          {nav('access', 'People & access', <Users />)}
+          {nav('audit', 'Audit log', <ScrollText />)}
           <div className="grp" style={{ display: 'flex', justifyContent: 'space-between' }}>Workspaces<button className="faint" onClick={() => setAdding(a => !a)} title="Open a workspace"><Plus style={{ width: 13, height: 13 }} /></button></div>
           {adding && (
             <form className="addns" onSubmit={e => { e.preventDefault(); const v = new FormData(e.currentTarget).get('n')?.toString().trim(); if (v) { switchNs(v); setAdding(false) } }}>
@@ -105,6 +109,8 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         {page === 'inbox' && <Inbox id={id} go={go} />}
         {page === 'runs' && <Runs id={id} go={go} runs={runs.data} error={runs.error} reload={runs.reload} />}
         {page === 'budgets' && <Budgets />}
+        {page === 'access' && <Access />}
+        {page === 'audit' && <Audit />}
         {page === 'agents' && <Agents id={id} go={go} />}
         {page === 'workflows' && <Workflows id={id} go={go} />}
       </div>

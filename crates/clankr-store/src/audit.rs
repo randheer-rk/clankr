@@ -129,6 +129,10 @@ pub(crate) async fn since(pool: &PgPool, after_seq: i64, limit: i64) -> Result<V
         .map_err(db)
 }
 
+pub(crate) async fn latest(pool: &PgPool, limit: i64) -> Result<Vec<AuditEvent>, ApiError> {
+    sqlx::query_as("select * from audit_events order by seq desc limit $1").bind(limit).fetch_all(pool).await.map_err(db)
+}
+
 // ponytail: loads the whole chain into memory; page through it once audit volume makes that hurt.
 pub(crate) async fn verify(pool: &PgPool) -> Result<Option<i64>, ApiError> {
     let rows: Vec<AuditEvent> = sqlx::query_as("select * from audit_events order by seq").fetch_all(pool).await.map_err(db)?;

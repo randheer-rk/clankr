@@ -150,7 +150,7 @@ pub fn required(method: &str, path: &str) -> Option<(Option<String>, Perm)> {
     let seg: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     let ns = |n: &str| Some(n.to_owned());
     Some(match seg.as_slice() {
-        ["v1", "whoami"] => return None,
+        ["v1", "whoami"] | ["v1", "auth", "config"] => return None,
         ["v1", "audit"] => (None, AuditRead),
         ["v1", "nodes", ..] => (None, NodesManage),
         ["v1", "namespaces", n, "secrets", ..] => (ns(n), if read { SecretsRead } else { SecretsWrite }),

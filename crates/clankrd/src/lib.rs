@@ -133,6 +133,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
         .merge(nodes::join_route())
+        .route("/v1/auth/config", get(authz::auth_config))
         .merge(v1)
         .fallback(ui::serve)
         .layer(middleware::from_fn(telemetry::http_span))
@@ -522,8 +523,12 @@ struct AuditQuery {
     #[serde(default)]
     after: i64,
     limit: Option<i64>,
+    /// Newest first, ignoring `after` (the web UI's view).
+    #[serde(default)]
+    latest: bool,
 }
 
 async fn audit(State(s): State<AppState>, Query(q): Query<AuditQuery>) -> ApiResult<Json<Vec<clankr_store::AuditEvent>>> {
-    Ok(Json(s.store.audit_since(q.after, q.limit.unwrap_or(500).clamp(1, 5000)).await?))
+    let limit = q.limit.unwrap_or(500).clamp(1, 5000);
+    Ok(Json(if q.latest { s.store.audit_latest(limit).await? } else { s.store.audit_since(q.after, limit).await? }))
 }

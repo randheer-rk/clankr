@@ -88,6 +88,8 @@ impl BindingCache {
 pub struct Oidc {
     pub issuer: String,
     pub audience: String,
+    /// Public client the web UI signs in with (authorization code + PKCE); defaults to `audience`.
+    pub client_id: Option<String>,
     pub user_claim: String,
     pub groups_claim: String,
     /// Minimum time between JWKS refetches triggered by unknown key ids.
@@ -101,7 +103,7 @@ const ALGS: &[Algorithm] = &[Algorithm::RS256, Algorithm::RS384, Algorithm::RS51
 impl Oidc {
     pub fn new(issuer: String, audience: String, user_claim: String, groups_claim: String) -> Self {
         let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().expect("http client");
-        Self { issuer: issuer.trim_end_matches('/').to_owned(), audience, user_claim, groups_claim, min_refresh: Duration::from_secs(30), http, keys: Mutex::new(None) }
+        Self { issuer: issuer.trim_end_matches('/').to_owned(), client_id: None, audience, user_claim, groups_claim, min_refresh: Duration::from_secs(30), http, keys: Mutex::new(None) }
     }
 
     async fn fetch_keys(&self) -> Result<JwkSet, String> {
@@ -155,6 +157,14 @@ impl Oidc {
         };
         Ok(Principal::User { id: id.to_owned(), groups })
     }
+}
+
+/// Unauthenticated: how the web UI can sign people in (no secrets here).
+pub(crate) async fn auth_config(State(s): State<AppState>) -> Json<Value> {
+    Json(match &s.oidc {
+        Some(o) => serde_json::json!({"oidc": {"issuer": o.issuer, "clientId": o.client_id.clone().unwrap_or_else(|| o.audience.clone()), "scopes": format!("openid email {}", o.groups_claim)}}),
+        None => serde_json::json!({}),
+    })
 }
 
 async fn whoami(Extension(p): Extension<Principal>) -> Json<Principal> {

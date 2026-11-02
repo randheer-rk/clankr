@@ -39,7 +39,10 @@ export interface Usage {
   budgets: { name: string; period: 'day' | 'month' | 'total'; window: string; tokens?: Meter; costUSD?: Meter }[]
   modelSpendThisMonth: { claim: string; calls: number; inputTokens: number; outputTokens: number; costUSD: number | null }[]
   spendByDay: { day: string; tokens: number; costUSD: number | null }[]
+  /** costUSD alerts carry micro-dollars. */
+  alerts: { at: string; budget: string; window: string; metric: 'tokens' | 'costUSD'; threshold: number; used: number; limit: number }[]
 }
+export interface ToolCall { at: string; claim: string; tool: string; toolVersion: string; method: string; state: string; task: string; approval?: string; durationMs?: number; truncated: boolean; output?: Json; outputSha256?: string; error?: string; actor: string }
 export interface Meter { limit: number; used: number; reserved: number }
 export interface Resource { kind: string; metadata: { name: string; namespace: string; labels?: Record<string, string>; creationTimestamp?: string; resourceVersion?: number }; spec: Record<string, Json>; status?: Record<string, Json> }
 

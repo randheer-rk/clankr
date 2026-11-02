@@ -232,6 +232,11 @@ impl Store {
         audit::since(&self.pool, after_seq, limit).await
     }
 
+    /// The newest `limit` records, newest first.
+    pub async fn audit_latest(&self, limit: i64) -> Result<Vec<AuditEvent>, ApiError> {
+        audit::latest(&self.pool, limit).await
+    }
+
     /// Recomputes the hash chain; returns the first seq whose hash doesn't match, if any.
     pub async fn verify_audit_chain(&self) -> Result<Option<i64>, ApiError> {
         audit::verify(&self.pool).await

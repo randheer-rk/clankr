@@ -39,6 +39,9 @@ struct Args {
     oidc_user_claim: String,
     #[arg(long, env = "CLANKR_OIDC_GROUPS_CLAIM", default_value = "groups")]
     oidc_groups_claim: String,
+    /// Public OIDC client the web UI uses (authorization code + PKCE); defaults to the audience.
+    #[arg(long, env = "CLANKR_OIDC_CLIENT_ID")]
+    oidc_client_id: Option<String>,
     /// Directory with pg_dump/pg_restore (default: PATH, or the embedded server's with --dev).
     #[arg(long, env = "CLANKR_PG_BIN", global = true)]
     pg_bin: Option<PathBuf>,
@@ -101,7 +104,9 @@ async fn main() -> anyhow::Result<()> {
     let mut state = clankrd::AppState::with_join_token(store.clone(), load_or_create_token()?, master, join_token).await?;
     if let (Some(issuer), Some(aud)) = (args.oidc_issuer, args.oidc_audience) {
         tracing::info!(%issuer, "OIDC user login enabled");
-        state.oidc = Some(std::sync::Arc::new(clankrd::authz::Oidc::new(issuer, aud, args.oidc_user_claim, args.oidc_groups_claim)));
+        let mut o = clankrd::authz::Oidc::new(issuer, aud, args.oidc_user_claim, args.oidc_groups_claim);
+        o.client_id = args.oidc_client_id;
+        state.oidc = Some(std::sync::Arc::new(o));
     }
     let tls = if args.insecure_http {
         tracing::warn!("serving plain HTTP: credentials travel unencrypted and nodes can't join");

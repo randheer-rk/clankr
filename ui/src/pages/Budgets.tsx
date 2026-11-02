@@ -1,7 +1,7 @@
 import { CalendarDays, CalendarRange, Cpu, HardDrive, Infinity as Inf, MemoryStick, Play, Boxes } from 'lucide-react'
 import { api, ns, type Usage } from '../api'
 import { useApp } from '../App'
-import { compact, money, titleCase, usePoll } from '../lib'
+import { ago, compact, money, titleCase, usePoll } from '../lib'
 
 const PALETTE = ['#0A84FF', '#5E5CE6', '#30B0C7', '#FF9F0A', '#BF5AF2', '#C7C7CC']
 
@@ -78,6 +78,20 @@ export function Budgets() {
             </tbody></table>
           </div>
           <div className="card">
+            <h3>Alerts<span>each threshold fires once per window</span></h3>
+            {d.alerts.length === 0 ? <p className="muted" style={{ marginTop: 8 }}>No budget has crossed an alert threshold.</p> : (
+              <table className="t"><tbody>
+                {d.alerts.map(a => (
+                  <tr key={`${a.budget}${a.window}${a.metric}${a.threshold}`}>
+                    <td style={{ width: 60 }}><span className={`pill ${a.threshold >= 100 ? 'bad' : 'wait'}`}>{a.threshold}%</span></td>
+                    <td><div style={{ fontWeight: 500 }}>{titleCase(a.budget)}</div><div className="faint" style={{ fontSize: 12 }}>{a.metric === 'costUSD' ? `${money(a.used / 1e6)} of ${money(a.limit / 1e6, 0)}` : `${compact(a.used)} of ${compact(a.limit)} tokens`} · {a.window.replace(/^(day|month):/, '')}</div></td>
+                    <td className="faint" style={{ textAlign: 'right' }}>{ago(a.at)}</td>
+                  </tr>
+                ))}
+              </tbody></table>
+            )}
+          </div>
+          <div className="card" style={{ gridColumn: '1 / -1' }}>
             <h3>Where the money goes<span>This month</span></h3>
             {d.modelSpendThisMonth.length === 0 ? <p className="muted" style={{ marginTop: 8 }}>No model calls yet this month.</p> : (
               <>
