@@ -232,4 +232,5 @@ M5 (gated backlog, in progress):
 - [x] Egress proxy (ADR 0027): `Agent.spec.egress` allowlist; node-side HTTP CONNECT/forward proxy per instance (SSRF-safe resolution, logged); kennel-init `--forward` bridges container localhost to it; proxy env set for all runtimes' clients
 - [x] Container tools on nodes (ADR 0028): two-phase delegate/complete for `sandbox`/`mcpStdio` calls from nodes; same checks and recording; late/missing reports settle as timeouts; runner extracted to `clankr-sandbox`
 - [x] Runtime classes verified end to end: agents under gVisor (limits via user scope, host UDS) and inside Firecracker microVMs (node socket + egress over vsock); UI shows deployments, canaries, hibernation, remote runs, Memory
+- [x] Direct network mode (ADR 0029): `Agent.spec.network: direct` + `NetworkPolicy{allowDirect, allowCidrs}`; gvisor/microvm only; filtered NAT via kennel `--network nat`; checked at save and at launch
 - [x] Autoscaling (ADR 0019): AgentDeployment `autoscale` from queue depth, up at once, down after a stabilization delay, scale to zero and back; leader-owned state

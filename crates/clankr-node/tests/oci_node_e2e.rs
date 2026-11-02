@@ -76,8 +76,25 @@ async fn the_same_agent_runs_in_a_microvm() {
     run_agent("microvm").await;
 }
 
+/// Direct network under gVisor: refused without a NetworkPolicy, then public hosts are
+/// reachable without the proxy while private ones aren't.
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_network_agent_under_gvisor() {
+    let online = std::net::TcpStream::connect_timeout(&"1.1.1.1:80".parse().unwrap(), Duration::from_secs(3)).is_ok();
+    let runsc = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("runsc").is_file()));
+    if !online || !runsc {
+        eprintln!("SKIPPED: needs the network and runsc");
+        return;
+    }
+    run_agent_with("gvisor", true).await;
+}
+
 /// The agent under kennel runtime class `class`; everything it checks must hold for each.
 async fn run_agent(class: &str) {
+    run_agent_with(class, false).await
+}
+
+async fn run_agent_with(class: &str, direct: bool) {
     let kbin = std::env::var_os("KENNEL").map(PathBuf::from).unwrap_or_else(|| repo().join("../kennel/target/debug/kennel"));
     if !kbin.exists() {
         eprintln!("SKIPPED: kennel binary not found (build ~/Dev/rust/kennel or set KENNEL)");
@@ -126,11 +143,27 @@ async fn run_agent(class: &str) {
     for r in [
         res("ProviderConnection", "mock", json!({"provider": "mock", "allowedModels": ["mock-1"]})),
         res("ModelClaim", "default", json!({"providerConnection": "mock", "model": "mock-1"})),
-        res("Agent", "writer", json!({"runtime": {"type": "oci", "image": pinned, "class": class}, "models": ["default"], "egress": [format!("127.0.0.2:{up_port}")], "taskTtlSeconds": 30, "resources": {"memoryMiB": 256, "cpus": 0.5, "pids": 64}})),
         res("Workflow", "wf", json!({"entrypoint": "write", "nodes": {"write": {"type": "agent", "agentRef": "writer"}}})),
     ] {
         store.create(&rctx, r).await.unwrap();
     }
+    let mut agent = json!({"runtime": {"type": "oci", "image": pinned, "class": class}, "models": ["default"], "egress": [format!("127.0.0.2:{up_port}")], "taskTtlSeconds": 30, "resources": {"memoryMiB": 256, "cpus": 0.5, "pids": 64}});
+    if direct {
+        agent["network"] = json!("direct");
+    }
+    // through the API, where policies are enforced
+    let post_agent = || {
+        let body = json!({"apiVersion": "clankr.io/v1alpha1", "kind": "Agent", "metadata": {"name": "writer", "namespace": NS}, "spec": agent.clone()});
+        let url = format!("{addr}/v1/namespaces/{NS}/agents");
+        async move { reqwest::Client::new().post(url).bearer_auth(TOKEN).json(&body).send().await.unwrap() }
+    };
+    if direct {
+        let r = post_agent().await;
+        assert_eq!(r.status(), 403, "direct network without a NetworkPolicy is refused");
+        store.create(&rctx, res("NetworkPolicy", "open", json!({"allowDirect": true}))).await.unwrap();
+    }
+    let r = post_agent().await;
+    assert_eq!(r.status(), 201, "{}", r.text().await.unwrap_or_default());
     let (stop, rx) = tokio::sync::watch::channel(false);
     let cfg = Config {
         agent: "writer".into(),
@@ -161,6 +194,13 @@ async fn run_agent(class: &str) {
     let out = &run.state.data["write"];
     assert_eq!(out["summary"], "mock(mock-1): base images");
     assert_eq!(out["root"], "ro", "{out}");
+    if direct {
+        assert_eq!(out["network"], "up", "direct: its own outbound network: {out}");
+        assert!(out["allowed"].as_str().is_some_and(|a| a.starts_with("error")), "direct: no proxy, and private hosts are dropped: {out}");
+        assert_eq!(out["refused"], 200, "direct: public hosts reachable without the allowlist: {out}");
+        stop.send(true).unwrap();
+        return;
+    }
     assert_eq!(out["network"], "down", "{out}");
     assert_eq!(out["uid"], 65534, "{out}");
     assert!(out["node"].as_str().unwrap().starts_with("v24."), "{out}");

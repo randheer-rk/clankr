@@ -39,6 +39,62 @@ pub struct AgentSpec {
     /// `host:port` (no port = 443 and 80). Empty: no network at all.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub egress: Vec<String>,
+    /// `direct`: outbound network of its own (NAT, public destinations only, plus the
+    /// NetworkPolicy's CIDRs) instead of the allowlisting proxy. Needs runtime class gvisor or
+    /// microvm, and a NetworkPolicy in the namespace that allows it.
+    #[serde(default, skip_serializing_if = "NetworkMode::is_proxy")]
+    pub network: NetworkMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NetworkMode {
+    /// No network of its own; `egress` hosts through the node's proxy (the default).
+    #[default]
+    Proxy,
+    Direct,
+}
+
+impl NetworkMode {
+    pub fn is_proxy(&self) -> bool {
+        *self == NetworkMode::Proxy
+    }
+}
+
+/// `kind: NetworkPolicy`: whether agents in this namespace may have direct network access.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkPolicySpec {
+    #[serde(default)]
+    pub allow_direct: bool,
+    /// Private IPv4 CIDRs direct-mode agents may reach (everything private is dropped otherwise).
+    #[serde(default)]
+    pub allow_cidrs: Vec<String>,
+}
+
+pub fn admit_network_policy(spec: &serde_json::Value) -> Result<NetworkPolicySpec, ApiError> {
+    let s: NetworkPolicySpec = serde_json::from_value(spec.clone()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, format!("network policy: {e}")).field("spec"))?;
+    for (i, c) in s.allow_cidrs.iter().enumerate() {
+        let ok = c.split_once('/').is_some_and(|(ip, p)| ip.parse::<std::net::Ipv4Addr>().is_ok() && p.parse::<u8>().is_ok_and(|p| p <= 32));
+        if !ok {
+            return Err(ApiError::new(ErrorCode::InvalidSpec, "want an IPv4 CIDR like 10.1.0.0/16").field(format!("spec.allowCidrs[{i}]")));
+        }
+    }
+    Ok(s)
+}
+
+/// May an agent of this namespace have direct network access? Every NetworkPolicy must allow
+/// it (and at least one must exist). Returns the private CIDRs all of them open.
+pub fn direct_network_allowed(policies: &[(String, NetworkPolicySpec)]) -> Result<Vec<String>, String> {
+    if policies.is_empty() {
+        return Err("direct network needs a NetworkPolicy with allowDirect: true in this namespace".into());
+    }
+    if let Some((name, _)) = policies.iter().find(|(_, p)| !p.allow_direct) {
+        return Err(format!("NetworkPolicy {name} doesn't allow direct network access"));
+    }
+    let mut cidrs = policies[0].1.allow_cidrs.clone();
+    cidrs.retain(|c| policies.iter().all(|(_, p)| p.allow_cidrs.contains(c)));
+    Ok(cidrs)
 }
 
 /// One `Agent.spec.egress` entry.
@@ -380,6 +436,9 @@ pub fn admit_agent(spec: &serde_json::Value) -> Result<AgentSpec, ApiError> {
             return Err(ApiError::new(ErrorCode::InvalidSpec, format!("claim {} mounted twice", v.claim)).field(format!("spec.volumes[{i}].claim")));
         }
     }
+    if s.network == NetworkMode::Direct && !matches!(s.runtime, Runtime::Oci { class: SandboxClass::Gvisor | SandboxClass::Microvm, .. }) {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "network: direct needs runtime class gvisor or microvm").field("spec.network"));
+    }
     for (i, e) in s.egress.iter().enumerate() {
         EgressRule::parse(e).map_err(|m| ApiError::new(ErrorCode::InvalidSpec, m).field(format!("spec.egress[{i}]")))?;
     }
@@ -575,5 +634,18 @@ mod image_policy_tests {
         for bad in ["", "*", "a..b", "x:99999", "a*.b", "http://x"] {
             assert!(EgressRule::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn direct_network_needs_policy_and_strong_sandbox() {
+        let img = format!("r/a@sha256:{}", "0".repeat(64));
+        assert!(admit_agent(&serde_json::json!({"runtime": {"type": "oci", "image": img}, "network": "direct"})).unwrap_err().message.contains("gvisor or microvm"));
+        assert!(admit_agent(&serde_json::json!({"runtime": {"type": "oci", "image": img, "class": "gvisor"}, "network": "direct"})).is_ok());
+        let p = |v| ("p".to_owned(), admit_network_policy(&v).unwrap());
+        assert!(direct_network_allowed(&[]).is_err());
+        assert!(direct_network_allowed(&[p(serde_json::json!({"allowDirect": false}))]).is_err());
+        let both = [p(serde_json::json!({"allowDirect": true, "allowCidrs": ["10.0.0.0/8", "10.9.0.0/16"]})), ("q".into(), admit_network_policy(&serde_json::json!({"allowDirect": true, "allowCidrs": ["10.9.0.0/16"]})).unwrap())];
+        assert_eq!(direct_network_allowed(&both).unwrap(), ["10.9.0.0/16"], "only CIDRs every policy opens");
+        assert!(admit_network_policy(&serde_json::json!({"allowCidrs": ["nope"]})).is_err());
     }
 }

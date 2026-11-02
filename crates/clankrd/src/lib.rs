@@ -286,7 +286,7 @@ fn node_route_allowed(node: &str, method: &axum::http::Method, path: &str) -> bo
         ["v1", "nodes", n, "heartbeat" | "renew"] => *n == node && method == axum::http::Method::POST,
         ["v1", "namespaces", _, "agents", _] => method == axum::http::Method::GET,
         // public keys and repository rules the node enforces at launch
-        ["v1", "namespaces", _, "imagepolicies"] => method == axum::http::Method::GET,
+        ["v1", "namespaces", _, "imagepolicies"] | ["v1", "namespaces", _, "networkpolicies"] => method == axum::http::Method::GET,
         // contexts: key reads/writes only; snapshots and restores are operator actions
         ["v1", "namespaces", _, "tasks", ..] | ["v1", "namespaces", _, "models", ..] | ["v1", "namespaces", _, "contexts", _, "keys", ..] => true,
         ["v1", "namespaces", _, "instances", _, "checkpoint"] => method == axum::http::Method::POST,
@@ -358,6 +358,7 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "AgentMailbox" => clankr_types::agent::admit_mailbox(&r.spec).map(drop),
         "AgentImage" => clankr_types::agent::admit_agent_image(&r.spec).map(drop),
         "ImagePolicy" => clankr_types::agent::admit_image_policy(&r.spec).map(drop),
+        "NetworkPolicy" => clankr_types::agent::admit_network_policy(&r.spec).map(drop),
         "Tool" => clankr_gateway::tools::admit_tool(&r.spec).map(drop),
         "ToolClaim" => clankr_gateway::tools::admit_tool_claim(&r.spec).map(drop),
         "Cluster" => clankr_types::federation::admit_cluster(&r.spec).map(drop),

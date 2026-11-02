@@ -129,8 +129,17 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
         .collect::<std::io::Result<_>>()?;
     let listener = UnixListener::bind(&sock)?;
     std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o666))?;
-    // egress proxy for the listed hosts (containers only: the process runtime is on the host network)
-    let egress = match (&spec.runtime, spec.egress.is_empty()) {
+    // direct network, re-checked here like ImagePolicy: the node is the last line before code runs
+    let direct_cidrs = match spec.network {
+        clankr_types::agent::NetworkMode::Direct => Some(clankr_types::agent::direct_network_allowed(&client.network_policies().await?).map_err(|e| anyhow::anyhow!("refusing to launch: {e}"))?),
+        clankr_types::agent::NetworkMode::Proxy => None,
+    };
+    if direct_cidrs.is_some() {
+        tracing::info!(instance = %cfg.instance, "launching with direct network (NetworkPolicy allows it)");
+    }
+    // egress proxy for the listed hosts (containers only: the process runtime is on the host
+    // network; a direct-network agent doesn't need one)
+    let egress = match (&spec.runtime, spec.egress.is_empty() || direct_cidrs.is_some()) {
         (Runtime::Oci { .. }, false) => {
             let rules = spec.egress.iter().map(|e| clankr_types::agent::EgressRule::parse(e).map_err(|m| anyhow::anyhow!(m))).collect::<Result<_>>()?;
             let allow_private = std::env::var("CLANKR_EGRESS_ALLOW_PRIVATE").is_ok_and(|v| v == "1");
@@ -179,7 +188,7 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
             // containers bind-mount the socket dir; a microVM gets each socket over vsock, in
             // its writable /tmp
             let sock_dir = if vm { VM_SOCKET_DIR } else { CONTAINER_SOCKET_DIR };
-            c.args(["run", "--runtime", class.kennel_arg(), "--network", "none", "--name", &cfg.instance])
+            c.args(["run", "--runtime", class.kennel_arg(), "--network", if direct_cidrs.is_some() { "nat" } else { "none" }, "--name", &cfg.instance])
                 .args(["--memory", &r.memory_mib.to_string(), "--cpus", &r.cpus.to_string(), "--pids", &r.pids.to_string()])
                 .args(["-e", &format!("CLANKR_SOCKET={sock_dir}/agent.sock")])
                 .args(["-e", &format!("CLANKR_AGENT={}", cfg.agent)])
@@ -198,6 +207,9 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
             }
             for k in &key_files {
                 c.arg("--verify-key").arg(k);
+            }
+            for cidr in direct_cidrs.iter().flatten() {
+                c.arg("--nat-allow").arg(cidr);
             }
             if egress.is_some() {
                 let port = crate::egress::CONTAINER_PORT;

@@ -248,6 +248,17 @@ impl Client {
         self.call(Method::POST, &format!("/toolcalls/{call_id}/complete"), Some(&body), Some(who)).await
     }
 
+    /// The namespace's NetworkPolicies, checked before launching a direct-network agent.
+    pub async fn network_policies(&self) -> Result<Vec<(String, clankr_types::agent::NetworkPolicySpec)>, ApiError> {
+        let v = self.call(Method::GET, "/networkpolicies", None, None).await?;
+        v["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| Ok((p["metadata"]["name"].as_str().unwrap_or_default().to_owned(), clankr_types::agent::admit_network_policy(&p["spec"])?)))
+            .collect()
+    }
+
     /// The namespace's ImagePolicies (name, spec), enforced before every launch.
     pub async fn image_policies(&self) -> Result<Vec<(String, clankr_types::agent::ImagePolicySpec)>, ApiError> {
         let v = self.call(Method::GET, "/imagepolicies", None, None).await?;

@@ -65,6 +65,16 @@ pub(crate) async fn admit_tracking(store: &Store, r: &Resource) -> Result<(), Ap
     }
     let a = admit_agent(&r.spec)?;
     clankr_types::agent::image_allowed(&policies(store, &r.metadata.namespace).await?, &a.runtime).map_err(|e| ApiError::new(ErrorCode::Forbidden, e).field("spec.runtime"))?;
+    if a.network == clankr_types::agent::NetworkMode::Direct {
+        let nps = store
+            .list("NetworkPolicy", Some(&r.metadata.namespace), &Default::default())
+            .await?
+            .0
+            .into_iter()
+            .map(|p| Ok((p.metadata.name.clone(), clankr_types::agent::admit_network_policy(&p.spec)?)))
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        clankr_types::agent::direct_network_allowed(&nps).map_err(|e| ApiError::new(ErrorCode::Forbidden, e).field("spec.network"))?;
+    }
     let Some(t) = &a.track else { return Ok(()) };
     let img = image(store, &r.metadata.namespace, &t.image).await.map_err(|e| bad("spec.track.image", e.message))?;
     if !img.stages.contains(&t.stage) {
