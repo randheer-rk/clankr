@@ -171,6 +171,7 @@ export function describe(e: HistoryEntry['event']): { text: string; detail?: str
     case 'RunCompleted': return { text: 'Run completed', tone: 'ok' }
     case 'RunFailed': return { text: 'Run failed', detail: String(e.reason), tone: 'bad' }
     case 'RunCancelled': return { text: 'Run cancelled', detail: String(e.reason), tone: 'off' }
+    case 'RunForked': return { text: `Forked from run ${String(e.from).slice(0, 8)} at #${e.at}`, detail: e.patch && Object.keys(e.patch).length ? `Changed: ${Object.keys(e.patch).join(', ')}` : undefined, tone: 'run' }
     default: return null
   }
 }

@@ -25,6 +25,8 @@ export interface Graph { entrypoint: string; nodes: Record<string, GraphNode> }
 export interface Run {
   runId: string; namespace: string; workflow: string; workflowGeneration: number; graph: Graph; startedBy?: string
   status: RunStatus; seq: number; state: RunState; createdAt: string; updatedAt: string
+  forkedFrom?: string
+  forkedAt?: number
 }
 export interface HistoryEntry { seq: number; at: string; event: { type: string } & Record<string, Json> }
 export interface Approval {

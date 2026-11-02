@@ -78,7 +78,8 @@ function RunDetail({ runId, onChange }: { runId: string; onChange: () => void })
         {r.status === 'Running' && <button className="ibtn" title="Cancel run" onClick={cancel}><Ban /></button>}
       </div>
       <div className="body">
-        <div className="crumb"><Workflow style={{ width: 14, height: 14, color: 'var(--ink-3)' }} />{r.workflow} <span className="faint">· run {shortId(r.runId)} · generation {r.workflowGeneration}</span></div>
+        <div className="crumb"><Workflow style={{ width: 14, height: 14, color: 'var(--ink-3)' }} />{r.workflow} <span className="faint">· run {shortId(r.runId)} · generation {r.workflowGeneration}</span>
+          {r.forkedFrom && <a className="faint" href={`#/runs/${r.forkedFrom}`} style={{ marginLeft: 6 }}>· forked from {shortId(r.forkedFrom)} at #{r.forkedAt}</a>}</div>
         <h1>{runTitle(r)}</h1>
         <div className="meta">
           <span className={`pill ${s.tone}`}>{s.label}</span>
@@ -104,7 +105,7 @@ function RunDetail({ runId, onChange }: { runId: string; onChange: () => void })
             </div>
           </>
         )}
-        {tab === 'history' && <div className="card" style={{ marginTop: 16 }}><h3>History<span>{history.data?.length ?? 0} events · append-only</span></h3><Activity history={history.data} raw /></div>}
+        {tab === 'history' && <TimeTravel runId={r.runId} history={history.data} />}
         {tab === 'tools' && <div className="card" style={{ marginTop: 16 }}><h3>Tool calls<span>{tools.data?.length ?? 0} calls · outputs are sanitized and bounded</span></h3><ToolCalls calls={tools.data} error={tools.error} /></div>}
         {tab === 'data' && <div style={{ marginTop: 16 }}><pre className="json">{JSON.stringify(r.state.data, null, 2)}</pre></div>}
         {tab === 'cost' && (
@@ -118,7 +119,7 @@ function RunDetail({ runId, onChange }: { runId: string; onChange: () => void })
   )
 }
 
-export function Activity({ history, limit, raw }: { history?: HistoryEntry[]; limit?: number; raw?: boolean }) {
+export function Activity({ history, limit, raw, picked, onPick }: { history?: HistoryEntry[]; limit?: number; raw?: boolean; picked?: number; onPick?: (seq: number) => void }) {
   if (!history) return <div className="empty">Loading…</div>
   const items = [...history].reverse().map(h => ({ h, d: describe(h.event) })).filter(x => raw || x.d)
   return (
@@ -126,7 +127,7 @@ export function Activity({ history, limit, raw }: { history?: HistoryEntry[]; li
       {items.slice(0, limit).map(({ h, d }) => {
         const t = tone[d?.tone ?? 'off']
         return (
-          <div className="act" key={h.seq}>
+          <div className={`act ${onPick ? 'pick' : ''} ${picked === h.seq ? 'on' : ''}`} key={h.seq} onClick={onPick && (() => onPick(h.seq))}>
             <span className="ai" style={{ background: t.bg, color: t.fg }}>{d?.tone === 'ok' ? <Check /> : d?.tone === 'bad' ? <X /> : d?.tone === 'wait' ? <Hand /> : <LoaderCircle />}</span>
             <p>{d?.text ?? h.event.type}{raw && <span className="faint mono" style={{ marginLeft: 8 }}>#{h.seq} {h.event.type}</span>}{d?.detail && <small>{d.detail}</small>}</p>
             <time>{clock(h.at)}</time>
@@ -219,5 +220,47 @@ function ToolCalls({ calls, error }: { calls?: ToolCall[]; error?: string }) {
         </Fragment>
       ))}
     </tbody></table>
+  )
+}
+
+/** History you can step through: pick an event to see the run as it stood then, and fork a new
+ *  run from that point (optionally with changed data). */
+function TimeTravel({ runId, history }: { runId: string; history?: HistoryEntry[] }) {
+  const { ns: n } = useApp()
+  const [seq, setSeq] = useState<number>()
+  const [patch, setPatch] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const at = usePoll(() => (seq ? api<{ seq: number; at: string; state: Run['state'] }>(`${ns(n)}/runs/${runId}/state?at=${seq}`) : Promise.resolve(undefined)), [n, runId, seq], 60000)
+  const fork = async () => {
+    setError(undefined)
+    let p: unknown = {}
+    try { p = patch.trim() ? JSON.parse(patch) : {} } catch { return setError('Changes must be a JSON object, e.g. {"input": {...}}') }
+    setBusy(true)
+    try {
+      const f = await api<Run>(`${ns(n)}/runs/${runId}/fork`, { method: 'POST', json: { at: seq, patch: p } })
+      location.hash = `#/runs/${f.runId}`
+    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
+  }
+  const s = at.data?.state
+  return (
+    <div className="grid2" style={{ gridTemplateColumns: '1.1fr 1fr' }}>
+      <div className="card"><h3>History<span>{history?.length ?? 0} events · pick one to look back</span></h3><Activity history={history} raw picked={seq} onPick={setSeq} /></div>
+      <div className="card" style={{ alignSelf: 'start', position: 'sticky', top: 16 }}>
+        {!seq ? <><h3>Time travel</h3><p className="muted" style={{ marginTop: 8 }}>Pick an event to see exactly what this run knew at that moment, then fork a new run from there to try something different.</p></> : (
+          <>
+            <h3>As of #{seq}<span>{at.data ? clock(at.data.at) : ''}</span></h3>
+            {at.error && <p className="err">{at.error}</p>}
+            {s && <div className="meta" style={{ marginTop: 8 }}><span className={`pill ${s.status === 'Running' ? 'run' : s.status === 'Succeeded' ? 'ok' : 'bad'}`}>{s.status}</span><span>{Object.keys(s.tasks).length} pending tasks</span><span>{Object.keys(s.waits).length} waiting</span></div>}
+            {s && <pre className="json" style={{ maxHeight: 260, overflow: 'auto' }}>{JSON.stringify(s.data, null, 2)}</pre>}
+            <label className="faint" style={{ display: 'block', marginTop: 12, fontSize: 12 }}>Changes for the fork (merged into the data, optional)</label>
+            <textarea className="note" style={{ width: '100%', height: 64, padding: 10, marginTop: 6, fontFamily: 'var(--mono, monospace)', fontSize: 12 }} value={patch} onChange={e => setPatch(e.target.value)} placeholder='{"input": {"tone": "dry"}}' />
+            <button className="b pri" style={{ marginTop: 10 }} disabled={busy || s?.status !== 'Running'} onClick={fork}><GitBranch />{busy ? 'Forking…' : 'Fork from here'}</button>
+            {s && s.status !== 'Running' && <p className="faint" style={{ marginTop: 6, fontSize: 12 }}>The run had finished by this point; pick an earlier event.</p>}
+            {error && <div className="err">{error}</div>}
+          </>
+        )}
+      </div>
+    </div>
   )
 }

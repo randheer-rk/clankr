@@ -74,6 +74,13 @@ enum Cmd {
         action: String,
         name: String,
     },
+    /// Context claims: read (now or back then), snapshot, restore.
+    Context {
+        #[arg(short, long, default_value = "default", global = true)]
+        namespace: String,
+        #[command(subcommand)]
+        cmd: ContextCmd,
+    },
     /// Inspect and operate AgentMailboxes.
     Mailbox {
         #[arg(short, long, default_value = "default", global = true)]
@@ -154,6 +161,24 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         max_tasks: u64,
     },
+}
+
+#[derive(Subcommand)]
+enum ContextCmd {
+    /// Keys and values; --as-of (RFC 3339) or --snapshot shows them as they were.
+    Ls {
+        claim: String,
+        #[arg(long, default_value = "")]
+        prefix: String,
+        #[arg(long, conflicts_with = "snapshot")]
+        as_of: Option<String>,
+        #[arg(long)]
+        snapshot: Option<String>,
+    },
+    Snapshot { claim: String, name: String },
+    Snapshots { claim: String },
+    /// Put the claim back the way a snapshot recorded it.
+    Restore { claim: String, name: String },
 }
 
 #[derive(Subcommand)]
@@ -313,6 +338,17 @@ enum RunCmd {
         id: String,
         #[arg(long, default_value = "")]
         reason: String,
+    },
+    /// The run as it stood after history event `seq` (see `clank run history`).
+    At { id: String, seq: i64 },
+    /// Start a new run from run `id`'s history up to event `--at`, optionally changing its data.
+    Fork {
+        id: String,
+        #[arg(long)]
+        at: i64,
+        /// JSON object merged into the run's data, e.g. '{"input": {...}}'
+        #[arg(long, default_value = "{}")]
+        patch: String,
     },
     /// Settle a task whose outcome is unknown (unsafe side effect, worker lost).
     Resolve {
@@ -493,6 +529,7 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Login { .. } | Cmd::Logout => unreachable!("handled before connecting"),
         Cmd::Usage { namespace, output } => usage(&api, &namespace, output),
         Cmd::Mailbox { namespace, cmd } => mailbox_cmd(&api, &namespace, cmd),
+        Cmd::Context { namespace, cmd } => context_cmd(&api, &namespace, cmd),
         Cmd::Worker { namespace, queue, exec, owner, ttl_seconds, max_tasks } => worker(&api, &namespace, &queue, &exec, &owner, ttl_seconds, max_tasks),
         Cmd::Delete { kind, name, namespace } => {
             let p = resolve(&kind)?;
@@ -756,6 +793,15 @@ fn run_cmd(api: &Api, ns: &str, cmd: RunCmd) -> Result<()> {
         RunCmd::Resolve { id, task, outcome, result, error } => {
             let body = serde_json::json!({ "signal": format!("resolve.{task}"), "payload": { "outcome": outcome, "result": json_arg(&result)?, "error": error } });
             run_summary(&ok(api.req(M::POST, &format!("{runs}/{id}/signal")).json(&body).send()?)?.json()?);
+        }
+        RunCmd::At { id, seq } => {
+            let v: Value = ok(api.req(M::GET, &format!("{runs}/{id}/state")).query(&[("at", seq)]).send()?)?.json()?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        RunCmd::Fork { id, at, patch } => {
+            let r: Value = ok(api.req(M::POST, &format!("{runs}/{id}/fork")).json(&serde_json::json!({"at": at, "patch": json_arg(&patch)?})).send()?)?.json()?;
+            println!("forked {id}@{} -> {}", r["forkedAt"], r["runId"].as_str().unwrap_or("?"));
+            run_summary(&r);
         }
         RunCmd::Cancel { id, reason } => {
             run_summary(&ok(api.req(M::POST, &format!("{runs}/{id}/cancel")).json(&serde_json::json!({ "reason": reason })).send()?)?.json()?);
@@ -1041,6 +1087,39 @@ fn secret_cmd(api: &Api, ns: &str, cmd: SecretCmd) -> Result<()> {
         SecretCmd::Delete { name } => {
             ok(api.req(M::DELETE, &format!("{base}/{name}")).send()?)?;
             println!("secret/{name} deleted");
+        }
+    }
+    Ok(())
+}
+
+fn context_cmd(api: &Api, ns: &str, cmd: ContextCmd) -> Result<()> {
+    use reqwest::Method as M;
+    let base = |claim: &str| format!("/v1/namespaces/{ns}/contexts/{claim}");
+    match cmd {
+        ContextCmd::Ls { claim, prefix, as_of, snapshot } => {
+            let mut q = vec![("prefix", prefix)];
+            q.extend(as_of.map(|t| ("asOf", t)));
+            q.extend(snapshot.map(|n| ("snapshot", n)));
+            let objs: Vec<Value> = ok(api.req(M::GET, &format!("{}/keys", base(&claim))).query(&q).send()?)?.json()?;
+            let rows: Vec<Vec<String>> = objs.iter().map(|o| vec![o["key"].as_str().unwrap_or("").to_owned(), o["version"].to_string(), o["writer"].as_str().unwrap_or("").to_owned(), o["value"].to_string()]).collect();
+            if rows.is_empty() {
+                eprintln!("No keys.");
+            } else {
+                print_table(&["KEY", "VERSION", "WRITER", "VALUE"].map(String::from), &rows);
+            }
+        }
+        ContextCmd::Snapshot { claim, name } => {
+            let r: Value = ok(api.req(M::POST, &format!("{}/snapshots", base(&claim))).json(&serde_json::json!({"name": name})).send()?)?.json()?;
+            println!("snapshot {name} taken (history position {})", r["seq"]);
+        }
+        ContextCmd::Snapshots { claim } => {
+            let snaps: Vec<Value> = ok(api.req(M::GET, &format!("{}/snapshots", base(&claim))).send()?)?.json()?;
+            let rows: Vec<Vec<String>> = snaps.iter().map(|x| ["name", "createdAt", "createdBy"].iter().map(|k| x[*k].as_str().unwrap_or("").to_owned()).collect()).collect();
+            print_table(&["NAME", "TAKEN", "BY"].map(String::from), &rows);
+        }
+        ContextCmd::Restore { claim, name } => {
+            let r: Value = ok(api.req(M::POST, &format!("{}/snapshots/{name}/restore", base(&claim))).send()?)?.json()?;
+            println!("{claim} restored to {name}: {} keys rewritten, {} deleted", r["written"], r["deleted"]);
         }
     }
     Ok(())

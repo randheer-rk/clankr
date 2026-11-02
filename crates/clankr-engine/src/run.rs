@@ -26,6 +26,8 @@ pub enum Event {
     TaskOutcomeUnknown { task: String },
     SignalReceived { signal: String, payload: Value },
     RunCancelled { reason: String },
+    /// First event after the history copied into a fork: `patch` is merged into the data.
+    RunForked { from: uuid::Uuid, at: i64, patch: Map<String, Value> },
     // consequences
     NodeEntered { node: NodeId },
     JoinArrived { node: NodeId },
@@ -122,6 +124,9 @@ pub fn evolve(mut s: RunState, e: &Event) -> RunState {
                 }
             }
         }
+        Event::RunForked { patch, .. } => {
+            s.data.extend(patch.clone());
+        }
         Event::RunCancelled { reason } => {
             s.status = RunStatus::Cancelled;
             s.error = Some(reason.clone());
@@ -169,6 +174,23 @@ fn clear_pending(s: &mut RunState) {
 
 pub fn replay<'a>(events: impl IntoIterator<Item = &'a Event>) -> RunState {
     events.into_iter().fold(RunState::default(), evolve)
+}
+
+impl Event {
+    /// Inputs start a decision; everything else is a consequence recorded with its input.
+    pub fn is_input(&self) -> bool {
+        matches!(
+            self,
+            Event::RunStarted { .. }
+                | Event::TaskCompleted { .. }
+                | Event::TaskFailed { .. }
+                | Event::TimerFired { .. }
+                | Event::TaskOutcomeUnknown { .. }
+                | Event::SignalReceived { .. }
+                | Event::RunCancelled { .. }
+                | Event::RunForked { .. }
+        )
+    }
 }
 
 /// Why an input was refused. Nothing is recorded for a refused input.

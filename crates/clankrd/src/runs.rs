@@ -7,6 +7,8 @@
 //!   GET  /v1/namespaces/{ns}/runs/{id}/history
 //!   POST /v1/namespaces/{ns}/runs/{id}/signal          {signal, payload}
 //!   POST /v1/namespaces/{ns}/runs/{id}/cancel          {reason}
+//!   GET  /v1/namespaces/{ns}/runs/{id}/state?at=N      the run as of event N (time travel)
+//!   POST /v1/namespaces/{ns}/runs/{id}/fork            {at, patch?} -> 201 new run from event N
 //!   POST /v1/namespaces/{ns}/tasks/lease               {queue, owner, ttlSeconds?, waitSeconds?} -> 200 task | 204
 //!   POST /v1/namespaces/{ns}/tasks/heartbeat           {runId, task, epoch, ttlSeconds?}
 //!   POST /v1/namespaces/{ns}/tasks/complete            {runId, task, epoch, result}
@@ -57,6 +59,8 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/namespaces/{ns}/runs/{id}/toolcalls", get(tool_calls))
         .route("/v1/namespaces/{ns}/runs/{id}/signal", post(signal))
         .route("/v1/namespaces/{ns}/runs/{id}/cancel", post(cancel))
+        .route("/v1/namespaces/{ns}/runs/{id}/state", get(state_at))
+        .route("/v1/namespaces/{ns}/runs/{id}/fork", post(fork))
         .route("/v1/namespaces/{ns}/tasks/lease", post(lease))
         .route("/v1/namespaces/{ns}/tasks/heartbeat", post(heartbeat))
         .route("/v1/namespaces/{ns}/tasks/complete", post(complete))
@@ -192,6 +196,29 @@ async fn cancel(
 ) -> ApiResult<Json<RunView>> {
     let reason = if b.reason.is_empty() { format!("cancelled by {}", ctx.actor) } else { b.reason };
     Ok(Json(s.engine.cancel(&ctx, &ns, run_id(&id)?, &reason).await?))
+}
+
+#[derive(Deserialize)]
+struct AtQuery {
+    at: i64,
+}
+
+async fn state_at(State(s): State<AppState>, Path((ns, id)): Path<(String, String)>, Query(q): Query<AtQuery>) -> ApiResult<Json<clankr_engine::RunAt>> {
+    Ok(Json(s.engine.state_at(&ns, run_id(&id)?, q.at).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForkBody {
+    at: i64,
+    #[serde(default)]
+    patch: serde_json::Map<String, Value>,
+}
+
+async fn fork(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path((ns, id)): Path<(String, String)>, Json(b): Json<ForkBody>) -> ApiResult<(StatusCode, Json<RunView>)> {
+    // a fork starts a run: same admission as starting one (quota on active runs)
+    let _quota = crate::quota::admit_run(&s.store, &ns).await?;
+    Ok((StatusCode::CREATED, Json(s.engine.fork(&ctx, &ns, run_id(&id)?, b.at, b.patch).await?)))
 }
 
 fn ttl(secs: Option<u64>) -> Duration {

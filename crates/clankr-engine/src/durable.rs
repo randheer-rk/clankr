@@ -43,6 +43,20 @@ pub struct RunView {
     pub state: RunState,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// For a fork: the run and history position it was copied from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_at: Option<i64>,
+}
+
+/// A run as it stood after event `seq` (time travel).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunAt {
+    pub seq: i64,
+    pub at: DateTime<Utc>,
+    pub state: RunState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,7 +212,7 @@ impl Engine {
 
     pub async fn get(&self, ns: &str, run_id: Uuid) -> Result<RunView, ApiError> {
         let row = sqlx::query(
-            "select run_id, namespace, workflow, workflow_generation, graph_digest, graph, started_by, seq, state, created_at, updated_at
+            "select run_id, namespace, workflow, workflow_generation, graph_digest, graph, started_by, seq, state, created_at, updated_at, forked_from, forked_at
              from workflow_runs where run_id = $1 and namespace = $2",
         )
         .bind(run_id)
@@ -221,6 +235,8 @@ impl Engine {
             state,
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
+            forked_from: row.get("forked_from"),
+            forked_at: row.get("forked_at"),
         })
     }
 
@@ -272,6 +288,138 @@ impl Engine {
             return Err(err(ErrorCode::OutcomeUnknown, format!("run {run_id}: replay diverges from stored state")));
         }
         Ok(())
+    }
+
+    /// The run as it stood after event `seq`: a pure replay of its history up to there.
+    pub async fn state_at(&self, ns: &str, run_id: Uuid, seq: i64) -> Result<RunAt, ApiError> {
+        let h = self.history(ns, run_id).await?;
+        let upto = h.iter().take_while(|e| e.seq <= seq).collect::<Vec<_>>();
+        let last = upto.last().ok_or_else(|| err(ErrorCode::InvalidSpec, format!("run {run_id} has no event {seq}")).field("at"))?;
+        if last.seq != seq {
+            return Err(err(ErrorCode::InvalidSpec, format!("run {run_id} has no event {seq}")).field("at"));
+        }
+        Ok(RunAt { seq, at: last.at, state: replay(upto.iter().map(|e| &e.event)) })
+    }
+
+    /// Starts a new run from `run_id`'s history up to event `at`, extended to the end of that
+    /// decision so the copy is never half-applied. The fork keeps the original's pinned graph,
+    /// merges `patch` into its data, and re-dispatches whatever was pending there: tasks run
+    /// again (under the fork's own idempotency keys), timers and approvals are re-armed.
+    pub async fn fork(&self, ctx: &RequestCtx, ns: &str, run_id: Uuid, at: i64, patch: serde_json::Map<String, Value>) -> Result<RunView, ApiError> {
+        let src = self.get(ns, run_id).await?;
+        let h = self.history(ns, run_id).await?;
+        let mut end = h.iter().position(|e| e.seq == at).ok_or_else(|| err(ErrorCode::InvalidSpec, format!("run {run_id} has no event {at}")).field("at"))?;
+        while end + 1 < h.len() && !h[end + 1].event.is_input() {
+            end += 1;
+        }
+        let copied = &h[..=end];
+        let at = copied[end].seq;
+        let mut state = replay(copied.iter().map(|e| &e.event));
+        if state.status.is_terminal() {
+            return Err(err(ErrorCode::InvalidSpec, format!("the run had already finished ({:?}) at event {at}; fork from an earlier one", state.status)).field("at"));
+        }
+        let g: WorkflowSpec = serde_json::from_value(src.graph.clone()).map_err(|e| err(ErrorCode::StorageUnavailable, e.to_string()))?;
+        let fork_id = Uuid::new_v4();
+        let now = Utc::now().trunc_subsecs(6);
+        let mut tx = self.store.pool().begin().await.map_err(db)?;
+        sqlx::query(
+            "insert into workflow_runs (run_id, namespace, workflow, workflow_generation, graph, graph_digest, status, seq, state, started_by, forked_from, forked_at)
+             values ($1, $2, $3, $4, $5, $6, 'Running', 0, '{}', $7, $8, $9)",
+        )
+        .bind(fork_id)
+        .bind(ns)
+        .bind(&src.workflow)
+        .bind(src.workflow_generation)
+        .bind(&src.graph)
+        .bind(&src.graph_digest)
+        .bind(&ctx.actor)
+        .bind(run_id)
+        .bind(at)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        sqlx::query("insert into workflow_events (run_id, seq, at, event) select $1, seq, at, event from workflow_events where run_id = $2 and seq <= $3")
+            .bind(fork_id)
+            .bind(run_id)
+            .bind(at)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        let forked = Event::RunForked { from: run_id, at, patch };
+        state = evolve(state, &forked);
+        sqlx::query("insert into workflow_events (run_id, seq, at, event) values ($1, $2, $3, $4)")
+            .bind(fork_id)
+            .bind(at + 1)
+            .bind(now)
+            .bind(serde_json::to_value(&forked).unwrap())
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+
+        // re-arm what was pending at the fork point, from the events that scheduled it
+        let scheduled = |task: &str| {
+            copied.iter().rev().find_map(|e| match &e.event {
+                Event::TaskScheduled { task: t, queue, .. } if t == task => Some(queue.clone()),
+                _ => None,
+            })
+        };
+        for (task, t) in state.tasks.iter().map(|(k, v)| (k, (v, "ready"))).chain(state.unknown.iter().map(|(k, v)| (k, (v, "unknown")))) {
+            let (p, st) = t;
+            let queue = scheduled(task).ok_or_else(|| err(ErrorCode::StorageUnavailable, format!("no TaskScheduled for {task}")))?;
+            let side_effects = match g.nodes[&p.node].side_effects {
+                SideEffects::Idempotent => "idempotent",
+                SideEffects::Unsafe => "unsafe",
+            };
+            sqlx::query(
+                "insert into tasks (run_id, task, namespace, node, attempt, queue, state, not_before, side_effects)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            )
+            .bind(fork_id)
+            .bind(task)
+            .bind(ns)
+            .bind(&p.node)
+            .bind(p.attempt as i32)
+            .bind(&queue)
+            .bind(st)
+            .bind(now)
+            .bind(side_effects)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        }
+        for timer in state.timers.keys() {
+            let due = copied.iter().rev().find_map(|e| match &e.event {
+                Event::TimerScheduled { timer: t, due_at, .. } if t == timer => Some(*due_at),
+                _ => None,
+            });
+            sqlx::query("insert into timers (run_id, timer, due_at) values ($1, $2, $3)")
+                .bind(fork_id)
+                .bind(timer)
+                .bind(due.unwrap_or(now))
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
+        for node in state.waits.values() {
+            if let crate::graph::NodeKind::Approval { approver_group, timeout, .. } = &g.nodes[node].kind {
+                let deadline = timeout.as_deref().and_then(crate::graph::parse_duration).map(|d| now + chrono::Duration::from_std(d).unwrap_or_default());
+                crate::approvals::request(&mut tx, fork_id, ns, node, state.visits[node], approver_group, Some(&ctx.actor), &state.data, deadline).await?;
+            }
+        }
+        sqlx::query("update workflow_runs set state = $2, seq = $3, status = $4, updated_at = now() where run_id = $1")
+            .bind(fork_id)
+            .bind(serde_json::to_value(&state).unwrap())
+            .bind(at + 1)
+            .bind(format!("{:?}", state.status))
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        if !state.tasks.is_empty() {
+            sqlx::query("select pg_notify($1, '')").bind(TASKS_CHANNEL).execute(&mut *tx).await.map_err(db)?;
+        }
+        audit(&mut tx, ctx, &format!("fork {run_id}@{at}"), ns, fork_id).await?;
+        tx.commit().await.map_err(db)?;
+        self.get(ns, fork_id).await
     }
 
     /// The queue a task belongs to (for authorizing who may report on it).
