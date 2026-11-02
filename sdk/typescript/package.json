@@ -1,0 +1,9 @@
+{
+  "name": "@clankr/sdk",
+  "version": "0.1.0",
+  "description": "Clankr agent SDK (agent runtime ABI v1.1) for Node.js",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "engines": { "node": ">=22.18" }
+}
