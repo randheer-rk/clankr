@@ -45,12 +45,26 @@ pub(crate) async fn current(store: &Store, ns: &str, name: &str, stage: &str) ->
         .map_err(clankr_store::db)
 }
 
-/// Agents that track a stage must run exactly what that stage holds (no hand-edited drift).
+/// The namespace's ImagePolicies, by name.
+pub(crate) async fn policies(store: &Store, ns: &str) -> Result<Vec<(String, clankr_types::agent::ImagePolicySpec)>, ApiError> {
+    store
+        .list("ImagePolicy", Some(ns), &Default::default())
+        .await?
+        .0
+        .into_iter()
+        .map(|p| Ok((p.metadata.name.clone(), clankr_types::agent::admit_image_policy(&p.spec)?)))
+        .collect()
+}
+
+/// Agents must satisfy the namespace's ImagePolicies (repositories, runtime); signatures are
+/// checked by the node at launch, where the registry is reachable. Agents that track a stage
+/// must run exactly what that stage holds (no hand-edited drift).
 pub(crate) async fn admit_tracking(store: &Store, r: &Resource) -> Result<(), ApiError> {
     if r.kind != "Agent" {
         return Ok(());
     }
     let a = admit_agent(&r.spec)?;
+    clankr_types::agent::image_allowed(&policies(store, &r.metadata.namespace).await?, &a.runtime).map_err(|e| ApiError::new(ErrorCode::Forbidden, e).field("spec.runtime"))?;
     let Some(t) = &a.track else { return Ok(()) };
     let img = image(store, &r.metadata.namespace, &t.image).await.map_err(|e| bad("spec.track.image", e.message))?;
     if !img.stages.contains(&t.stage) {

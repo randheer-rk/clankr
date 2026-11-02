@@ -88,6 +88,66 @@ pub fn is_digest(d: &str) -> bool {
     d.strip_prefix("sha256:").is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
 }
 
+/// `kind: ImagePolicy` (SEC-06/07/19): which images may run in a namespace. Every policy in the
+/// namespace applies. The API checks repositories when an Agent is saved; the node re-checks
+/// everything, including signatures (via `kennel run --verify-key`), before every launch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImagePolicySpec {
+    /// Repository prefixes images must come from, e.g. `registry.example/team/` (empty = any).
+    #[serde(default)]
+    pub allowed_repositories: Vec<String>,
+    /// Images must carry a cosign-format signature from one of `keys`.
+    #[serde(default)]
+    pub require_signature: bool,
+    /// PEM public keys (ECDSA P-256) trusted for signatures.
+    #[serde(default)]
+    pub keys: Vec<String>,
+    /// Allow the unsandboxed `process` runtime (S0, development only) here.
+    #[serde(default)]
+    pub allow_process_runtime: bool,
+}
+
+pub fn admit_image_policy(spec: &serde_json::Value) -> Result<ImagePolicySpec, ApiError> {
+    let s: ImagePolicySpec = serde_json::from_value(spec.clone()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, format!("image policy: {e}")).field("spec"))?;
+    if s.require_signature && s.keys.is_empty() {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "requireSignature needs at least one public key").field("spec.keys"));
+    }
+    for (i, k) in s.keys.iter().enumerate() {
+        if !(k.contains("-----BEGIN PUBLIC KEY-----") && k.contains("-----END PUBLIC KEY-----")) {
+            return Err(ApiError::new(ErrorCode::InvalidSpec, "want a PEM public key (kennel keygen writes <name>.pub)").field(format!("spec.keys[{i}]")));
+        }
+    }
+    Ok(s)
+}
+
+/// What launching `runtime` under `policies` requires: the trusted keys a signature must verify
+/// with (empty = no signature needed). Err explains which rule refuses it.
+pub fn image_allowed(policies: &[(String, ImagePolicySpec)], runtime: &Runtime) -> Result<Vec<String>, String> {
+    let mut keys = vec![];
+    match runtime {
+        Runtime::Process { .. } => {
+            if let Some((name, _)) = policies.iter().find(|(_, p)| !p.allow_process_runtime) {
+                return Err(format!("ImagePolicy {name} doesn't allow the unsandboxed process runtime"));
+            }
+        }
+        Runtime::Oci { image } => {
+            let repo = image.split('@').next().unwrap_or(image);
+            for (name, p) in policies {
+                if !p.allowed_repositories.is_empty() && !p.allowed_repositories.iter().any(|pre| repo.starts_with(pre.as_str())) {
+                    return Err(format!("ImagePolicy {name} allows only images from {}", p.allowed_repositories.join(", ")));
+                }
+                if p.require_signature {
+                    keys.extend(p.keys.iter().cloned());
+                }
+            }
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    Ok(keys)
+}
+
 /// `kind: AgentMailbox` (CL-30-02).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -313,5 +373,28 @@ impl Runtime {
             Runtime::Process { .. } => "process",
             Runtime::Oci { .. } => "oci",
         }
+    }
+}
+
+#[cfg(test)]
+mod image_policy_tests {
+    use super::*;
+    use serde_json::json;
+
+    const KEY: &str = "-----BEGIN PUBLIC KEY-----\nMFkw\n-----END PUBLIC KEY-----\n";
+
+    #[test]
+    fn policies_combine() {
+        assert!(admit_image_policy(&json!({"requireSignature": true})).is_err(), "signature without keys");
+        assert!(admit_image_policy(&json!({"keys": ["not a key"]})).is_err());
+        let team = admit_image_policy(&json!({"allowedRepositories": ["registry.example/team/"], "requireSignature": true, "keys": [KEY]})).unwrap();
+        let open = admit_image_policy(&json!({"allowProcessRuntime": true})).unwrap();
+        let ps = vec![("team".to_owned(), team), ("open".to_owned(), open)];
+        let oci = |i: &str| Runtime::Oci { image: i.into() };
+        assert_eq!(image_allowed(&ps, &oci("registry.example/team/a@sha256:00")).unwrap(), [KEY]);
+        assert!(image_allowed(&ps, &oci("docker.io/evil/a@sha256:00")).unwrap_err().contains("ImagePolicy team allows only"));
+        let process = Runtime::Process { command: vec!["sh".into()], env: Default::default(), working_dir: None };
+        assert!(image_allowed(&ps, &process).unwrap_err().contains("ImagePolicy team doesn't allow"), "every policy must allow process runtimes");
+        assert!(image_allowed(&[], &process).unwrap().is_empty(), "no policy, no restriction");
     }
 }

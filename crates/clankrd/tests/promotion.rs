@@ -128,3 +128,21 @@ async fn promote_gate_roll_out_and_roll_back() {
     let audit = s.store.audit_since(0, 1000).await.unwrap();
     assert!(audit.iter().any(|e| e.kind.as_deref() == Some("AgentImage") && e.action.starts_with("rollback production")), "promotions are audited");
 }
+
+#[tokio::test]
+async fn image_policy_admission() {
+    let s = Server::start().await;
+    let key = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----\n";
+    let (st, _) = s.call(OWNER, M::POST, "/imagepolicies", Some(res("ImagePolicy", "bad", json!({"requireSignature": true})))).await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY, "signatures need keys");
+    // before any policy, anything digest-pinned goes
+    let elsewhere = |name: &str, image: &str| res("Agent", name, json!({"runtime": {"type": "oci", "image": image}}));
+    assert_eq!(s.call(OWNER, M::POST, "/agents", Some(elsewhere("early", &format!("docker.io/x/y@{}", digest('c'))))).await.0, StatusCode::CREATED);
+    let (st, _) = s.call(OWNER, M::POST, "/imagepolicies", Some(res("ImagePolicy", "team", json!({"allowedRepositories": ["registry.example/team/"], "requireSignature": true, "keys": [key]})))).await;
+    assert_eq!(st, StatusCode::CREATED);
+    let (st, e) = s.call(OWNER, M::POST, "/agents", Some(elsewhere("outside", &format!("docker.io/x/y@{}", digest('c'))))).await;
+    assert!(st == StatusCode::FORBIDDEN && e["message"].as_str().unwrap().contains("allows only images from registry.example/team/"), "{e}");
+    assert_eq!(s.call(OWNER, M::POST, "/agents", Some(elsewhere("inside", &format!("{REPO}@{}", digest('d'))))).await.0, StatusCode::CREATED);
+    let (st, e) = s.call(OWNER, M::POST, "/agents", Some(res("Agent", "proc", json!({"runtime": {"type": "process", "command": ["sh"]}})))).await;
+    assert!(st == StatusCode::FORBIDDEN && e["message"].as_str().unwrap().contains("process runtime"), "{e}");
+}

@@ -106,6 +106,16 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o711))?;
     let sock = dir.join("agent.sock");
     let _ = std::fs::remove_file(&sock);
+    // ImagePolicy, re-checked at every launch: the node is the last line before code runs
+    let keys = clankr_types::agent::image_allowed(&client.image_policies().await?, &spec.runtime).map_err(|e| anyhow::anyhow!("refusing to launch: {e}"))?;
+    let key_files: Vec<PathBuf> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, pem)| {
+            let p = dir.join(format!("trusted-{i}.pub"));
+            std::fs::write(&p, pem).map(|_| p)
+        })
+        .collect::<std::io::Result<_>>()?;
     let listener = UnixListener::bind(&sock)?;
     std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o666))?;
 
@@ -152,6 +162,9 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
                 .args(["-e", &format!("CLANKR_NAMESPACE={}", cfg.namespace)]);
             for (host, mount, ro) in &volumes {
                 c.arg("-v").arg(format!("{}:{mount}{}", host.display(), if *ro { ":ro" } else { "" }));
+            }
+            for k in &key_files {
+                c.arg("--verify-key").arg(k);
             }
             c.arg(image);
             c

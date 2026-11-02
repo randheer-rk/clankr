@@ -211,6 +211,17 @@ impl Client {
         serde_json::from_value(v).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, e.to_string()))
     }
 
+    /// The namespace's ImagePolicies (name, spec), enforced before every launch.
+    pub async fn image_policies(&self) -> Result<Vec<(String, clankr_types::agent::ImagePolicySpec)>, ApiError> {
+        let v = self.call(Method::GET, "/imagepolicies", None, None).await?;
+        v["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| Ok((p["metadata"]["name"].as_str().unwrap_or_default().to_owned(), clankr_types::agent::admit_image_policy(&p["spec"])?)))
+            .collect()
+    }
+
     pub async fn lease(&self, queue: &str, owner: &str, ttl: u64, wait: u64) -> Result<Option<Lease>, ApiError> {
         let v = self.call(Method::POST, "/tasks/lease", Some(&json!({"queue": queue, "owner": owner, "ttlSeconds": ttl, "waitSeconds": wait})), None).await?;
         if v.is_null() {
