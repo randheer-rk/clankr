@@ -124,6 +124,42 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
 
     let mut tx = store.pool().begin().await.map_err(clankr_store::db)?;
     Store::fence(&mut tx, lead).await?;
+    // queue-driven sizing; the leader owns autoscale_state, so this is race-free
+    let mut scaled: HashMap<(String, String), (u32, i64)> = HashMap::new();
+    for ((ns, dep), (spec, ..)) in wanted.iter_mut() {
+        let Some(a) = spec.autoscale.clone() else { continue };
+        let depth: i64 = sqlx::query_scalar("select count(*) from tasks where namespace = $1 and queue = $2 and state in ('ready', 'leased')")
+            .bind(ns)
+            .bind(format!("agent/{}", spec.agent))
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(clankr_store::db)?;
+        let row: Option<(i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as("select replicas, low_since from autoscale_state where namespace = $1 and deployment = $2")
+            .bind(ns)
+            .bind(dep)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(clankr_store::db)?;
+        let (current, low_since) = row.map_or((a.min_replicas, None), |(r, l)| (r as u32, l));
+        let (next, low) = autoscale_step(&a, depth, current, low_since, chrono::Utc::now());
+        sqlx::query(
+            "insert into autoscale_state (namespace, deployment, replicas, low_since) values ($1, $2, $3, $4)
+             on conflict (namespace, deployment) do update set replicas = excluded.replicas, low_since = excluded.low_since, updated_at = now()",
+        )
+        .bind(ns)
+        .bind(dep)
+        .bind(next as i64)
+        .bind(low)
+        .execute(&mut *tx)
+        .await
+        .map_err(clankr_store::db)?;
+        if next != current {
+            tracing::info!(namespace = %ns, deployment = %dep, from = current, to = next, queue_depth = depth, "autoscaled");
+        }
+        spec.replicas = next;
+        scaled.insert((ns.clone(), dep.clone()), (next, depth));
+    }
+
     sqlx::query("update nodes set ready = false where ready and last_heartbeat < now() - make_interval(secs => $1)")
         .bind(NODE_TIMEOUT_SECS as f64)
         .execute(&mut *tx)
@@ -307,7 +343,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         let rollout = (updated < list.len() || (waiting_rollout > 0)).then(|| {
             format!("{updated}/{} on generation {generation}, {available} ready; {waiting_rollout} waiting (maxUnavailable {})", list.len(), spec.rollout.max_unavailable)
         });
-        statuses.push((res.clone(), placed, pending, reason, Rollup { generation: *generation, available, rollout }));
+        statuses.push((res.clone(), placed, pending, reason, Rollup { generation: *generation, available, rollout, autoscale: scaled.get(key).copied() }));
     }
     tx.commit().await.map_err(clankr_store::db)?;
 
@@ -393,12 +429,34 @@ async fn delete(tx: &mut clankr_store::Tx, id: &str) -> Result<(), ApiError> {
 }
 
 /// Best effort: status is informational, the instances table is the truth.
+/// One autoscaling step: the replica count to run now and when demand first dipped below it.
+/// Up: immediately to what the queue needs. Down: only once demand has stayed lower for the
+/// delay, then straight to what it needs (no flapping on bursty queues).
+pub fn autoscale_step(
+    a: &clankr_types::agent::Autoscale,
+    depth: i64,
+    current: u32,
+    low_since: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (u32, Option<chrono::DateTime<chrono::Utc>>) {
+    let need = (depth.max(0) as u64).div_ceil(a.target_tasks_per_replica as u64) as u32;
+    let need = need.clamp(a.min_replicas, a.max_replicas);
+    let current = current.clamp(a.min_replicas, a.max_replicas);
+    if need >= current {
+        return (need, None);
+    }
+    let since = low_since.unwrap_or(now);
+    if (now - since).num_seconds() >= a.scale_down_delay_seconds as i64 { (need, None) } else { (current, Some(since)) }
+}
+
 /// Rollout progress for a deployment's status.
 struct Rollup {
     generation: i64,
     /// Ready on the current Agent generation for at least minReadySeconds.
     available: usize,
     rollout: Option<String>,
+    /// (replicas chosen, queue depth) when autoscaled.
+    autoscale: Option<(u32, i64)>,
 }
 
 async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usize, pending: usize, reason: &str, rollup: Option<Rollup>) {
@@ -409,6 +467,9 @@ async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usiz
     if let Some(r) = rollup {
         status["agentGeneration"] = r.generation.into();
         status["available"] = r.available.into();
+        if let Some((replicas, depth)) = r.autoscale {
+            status["autoscale"] = serde_json::json!({"replicas": replicas, "queueDepth": depth});
+        }
         if let Some(msg) = r.rollout {
             status["phase"] = "RollingOut".into();
             status["rollout"] = msg.into();
@@ -450,6 +511,22 @@ pub fn spawn(store: Store, holder: String, every: Duration) -> tokio::task::Join
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autoscale_up_fast_down_slow() {
+        let a = clankr_types::agent::Autoscale { min_replicas: 0, max_replicas: 5, target_tasks_per_replica: 2, scale_down_delay_seconds: 60 };
+        let t0 = chrono::Utc::now();
+        let at = |s: i64| t0 + chrono::Duration::seconds(s);
+        assert_eq!(autoscale_step(&a, 0, 0, None, t0), (0, None), "scale to zero when idle");
+        assert_eq!(autoscale_step(&a, 3, 0, None, t0), (2, None), "ceil(3/2)");
+        assert_eq!(autoscale_step(&a, 50, 2, None, t0), (5, None), "capped at max");
+        assert_eq!(autoscale_step(&a, 1, 5, None, at(0)), (5, Some(at(0))), "demand dropped: start the clock");
+        assert_eq!(autoscale_step(&a, 1, 5, Some(at(0)), at(30)), (5, Some(at(0))), "still within the delay");
+        assert_eq!(autoscale_step(&a, 9, 5, Some(at(0)), at(40)), (5, None), "a burst resets it");
+        assert_eq!(autoscale_step(&a, 1, 5, Some(at(0)), at(61)), (1, None), "down after the delay");
+        let floor = clankr_types::agent::Autoscale { min_replicas: 2, ..a };
+        assert_eq!(autoscale_step(&floor, 0, 0, None, t0), (2, None), "never below min");
+    }
 
     fn node(name: &str, mem: u64, used: u64, runtimes: &[&str], labels: &[(&str, &str)]) -> Candidate {
         Candidate {

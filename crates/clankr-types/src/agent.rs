@@ -318,6 +318,27 @@ pub struct DeploymentSpec {
     pub node_selector: BTreeMap<String, String>,
     #[serde(default)]
     pub rollout: Rollout,
+    /// Size the deployment from its queue instead of `replicas`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autoscale: Option<Autoscale>,
+}
+
+/// Queue-driven scaling: replicas = ceil(tasks ready or in progress / targetTasksPerReplica),
+/// clamped to [min, max]. Up immediately; down only after demand stayed lower for the delay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Autoscale {
+    #[serde(default)]
+    pub min_replicas: u32,
+    pub max_replicas: u32,
+    #[serde(default = "one")]
+    pub target_tasks_per_replica: u32,
+    #[serde(default = "five_minutes")]
+    pub scale_down_delay_seconds: u32,
+}
+
+fn five_minutes() -> u32 {
+    300
 }
 
 /// How an Agent change rolls through a deployment's instances.
@@ -352,6 +373,11 @@ pub fn admit_deployment(spec: &serde_json::Value) -> Result<DeploymentSpec, ApiE
     }
     if s.agent.is_empty() {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "agent is required").field("spec.agent"));
+    }
+    if let Some(a) = &s.autoscale
+        && (a.max_replicas == 0 || a.max_replicas > 1000 || a.min_replicas > a.max_replicas || a.target_tasks_per_replica == 0)
+    {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "autoscale needs 0 ≤ minReplicas ≤ maxReplicas ≤ 1000, maxReplicas ≥ 1, targetTasksPerReplica ≥ 1").field("spec.autoscale"));
     }
     if s.rollout.max_unavailable == 0 {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "maxUnavailable must be at least 1, or a rollout could never start").field("spec.rollout.maxUnavailable"));
