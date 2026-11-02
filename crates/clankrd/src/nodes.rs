@@ -63,9 +63,20 @@ async fn join(State(s): State<AppState>, Json(b): Json<JoinBody>) -> ApiResult<J
     Ok(Json(json!({ "certificate": cert, "ca": ca.cert_pem })))
 }
 
-async fn heartbeat(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path(name): Path<String>) -> ApiResult<Json<Value>> {
+async fn heartbeat(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path(name): Path<String>, body: axum::body::Bytes) -> ApiResult<Json<Value>> {
     if node_of(&ctx) != Some(name.as_str()) {
         return Err(ApiError::new(ErrorCode::Forbidden, "heartbeat is node-only").into());
+    }
+    // optional readiness report: {"instances": [{id, epoch, ready}]} (older nodes send nothing)
+    if !body.is_empty() {
+        let v: Value = serde_json::from_slice(&body).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, format!("heartbeat body: {e}")))?;
+        let reports: Vec<(String, i64, bool)> = v["instances"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|i| Some((i["id"].as_str()?.to_owned(), i["epoch"].as_i64()?, i["ready"].as_bool().unwrap_or(false))))
+            .collect();
+        s.store.report_readiness(&name, &reports).await?;
     }
     let exp = chrono::Utc::now().timestamp() + crate::identity::TTL_SECS;
     let assignments: Vec<Value> = s

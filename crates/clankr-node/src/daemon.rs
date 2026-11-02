@@ -2,6 +2,7 @@
 //! brokering of the agent's model/context calls (PRD §15.3, §20 instance admission).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -32,6 +33,8 @@ pub struct Config {
     pub kennel: PathBuf,
     /// kennel image store root (`--root`); None uses kennel's default.
     pub kennel_root: Option<PathBuf>,
+    /// Set while the agent has completed its handshake (reported in fleet heartbeats).
+    pub ready: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 pub async fn write_frame(w: &mut OwnedWriteHalf, f: &NodeFrame) -> Result<()> {
@@ -57,7 +60,11 @@ pub async fn run_instance(client: Client, cfg: Config, mut shutdown: watch::Rece
     let mut backoff = Duration::from_secs(1);
     while !*shutdown.borrow() {
         let spec = admit_agent(&client.agent(&cfg.agent).await?.spec)?;
-        match run_once(&client, &cfg, &spec, &mut shutdown).await {
+        let outcome = run_once(&client, &cfg, &spec, &mut shutdown).await;
+        if let Some(r) = &cfg.ready {
+            r.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        match outcome {
             Ok(()) => return Ok(()),
             Err(e) => {
                 tracing::warn!(instance = %cfg.instance, error = %format!("{e:#}"), retry_in = ?backoff, "agent instance stopped");
@@ -191,6 +198,9 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
         bail!("expected Ready, got {ready:?}");
     }
     tracing::info!(instance = %cfg.instance, sdk, "agent ready");
+    if let Some(r) = &cfg.ready {
+        r.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 
     // frames arrive through a channel so the select loop below stays cancel-safe
     let (ftx, mut frames) = mpsc::channel::<Result<AgentFrame>>(16);

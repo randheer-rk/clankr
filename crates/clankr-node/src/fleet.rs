@@ -38,6 +38,7 @@ pub struct FleetConfig {
 
 struct Running {
     epoch: i64,
+    ready: Arc<std::sync::atomic::AtomicBool>,
     identity: Arc<RwLock<String>>,
     stop: watch::Sender<bool>,
     task: JoinHandle<Result<()>>,
@@ -71,7 +72,12 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
                 Err(e) => tracing::warn!(error = %e, "certificate renewal failed; will retry"),
             }
         }
-        let want: Vec<Assignment> = match Client::node_heartbeat(&servers, &tls, &cfg.name).await {
+        // which instances are up, for rolling restarts; only counts for the epoch reported
+        let report: Vec<serde_json::Value> = running
+            .iter()
+            .map(|(id, r)| serde_json::json!({"id": id, "epoch": r.epoch, "ready": !r.task.is_finished() && r.ready.load(std::sync::atomic::Ordering::Relaxed)}))
+            .collect();
+        let want: Vec<Assignment> = match Client::node_heartbeat(&servers, &tls, &cfg.name, &serde_json::json!({"instances": report})).await {
             Ok(a) => {
                 last_ok = Instant::now();
                 a
@@ -101,6 +107,7 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
                 continue;
             }
             let (stop, rx) = watch::channel(false);
+            let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let identity = Arc::new(RwLock::new(a.identity.clone()));
             let client = Client::fleet(&servers, http.clone(), &a.namespace, identity.clone());
             let icfg = Config {
@@ -110,9 +117,10 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
                 instance: a.id.clone(),
                 kennel: cfg.kennel.clone(),
                 kennel_root: cfg.kennel_root.clone(),
+                ready: Some(ready.clone()),
             };
             tracing::info!(instance = %a.id, agent = %a.agent, epoch = a.epoch, "starting instance");
-            running.insert(a.id.clone(), Running { epoch: a.epoch, identity, stop, task: tokio::spawn(run_instance(client, icfg, rx)) });
+            running.insert(a.id.clone(), Running { epoch: a.epoch, ready, identity, stop, task: tokio::spawn(run_instance(client, icfg, rx)) });
         }
     }
     stop_all(&mut running).await;

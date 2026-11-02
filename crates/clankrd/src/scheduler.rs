@@ -108,7 +108,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         let (agent, generation) = match store.get(ns, "Agent", &spec.agent).await.and_then(|a| Ok((admit_agent(&a.spec)?, a.metadata.generation))) {
             Ok(a) => a,
             Err(e) => {
-                set_status(store, d, 0, spec.replicas as usize, &format!("agent {}: {}", spec.agent, e.message)).await;
+                set_status(store, d, 0, spec.replicas as usize, &format!("agent {}: {}", spec.agent, e.message), None).await;
                 continue;
             }
         };
@@ -133,7 +133,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         .fetch_all(&mut *tx)
         .await
         .map_err(clankr_store::db)?;
-    let instances: Vec<Instance> = sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation from instances order by id for update")
+    let instances: Vec<Instance> = sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since from instances order by id for update")
         .fetch_all(&mut *tx)
         .await
         .map_err(clankr_store::db)?;
@@ -207,6 +207,10 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         }
         let mut reason = String::new();
         let mut placed = 0;
+        // rolling restarts: at most maxUnavailable instances not-ready at a time
+        let min_ready = chrono::Duration::seconds(spec.rollout.min_ready_seconds.into());
+        let mut unavailable = list.iter().filter(|i| !i.available(min_ready)).count();
+        let mut waiting_rollout = 0;
         for i in &list {
             if keep(i, &bindings) {
                 placed += 1;
@@ -217,9 +221,16 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                 });
                 set_note(&mut tx, i, note.as_deref()).await?;
                 if i.agent_generation != *generation {
+                    let was_available = i.available(min_ready);
+                    if was_available && unavailable >= spec.rollout.max_unavailable as usize {
+                        waiting_rollout += 1;
+                        continue;
+                    }
+                    if was_available {
+                        unavailable += 1;
+                    }
                     // the Agent changed (new image, env, limits): restart in place on the new spec;
                     // the epoch bump fences the old process like any move
-                    // ponytail: every replica restarts at once; add maxUnavailable when that hurts
                     sqlx::query("update instances set epoch = epoch + 1, agent_generation = $2, memory_mib = $3, cpus = $4, updated_at = now() where id = $1")
                         .bind(&i.id)
                         .bind(generation)
@@ -290,12 +301,18 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         }
         let pending = spec.replicas as usize - placed.min(spec.replicas as usize);
         report.pending += pending;
-        statuses.push((res.clone(), placed, pending, reason));
+        let available = list.iter().filter(|i| i.available(min_ready) && i.agent_generation == *generation).count();
+        // still rolling while any instance runs an older generation (or hasn't proven ready on this one)
+        let updated = list.iter().filter(|i| i.agent_generation == *generation).count();
+        let rollout = (updated < list.len() || (waiting_rollout > 0)).then(|| {
+            format!("{updated}/{} on generation {generation}, {available} ready; {waiting_rollout} waiting (maxUnavailable {})", list.len(), spec.rollout.max_unavailable)
+        });
+        statuses.push((res.clone(), placed, pending, reason, Rollup { generation: *generation, available, rollout }));
     }
     tx.commit().await.map_err(clankr_store::db)?;
 
-    for (res, placed, pending, reason) in statuses {
-        set_status(store, &res, placed, pending, &reason).await;
+    for (res, placed, pending, reason, rollup) in statuses {
+        set_status(store, &res, placed, pending, &reason, Some(rollup)).await;
     }
     Ok(report)
 }
@@ -376,10 +393,26 @@ async fn delete(tx: &mut clankr_store::Tx, id: &str) -> Result<(), ApiError> {
 }
 
 /// Best effort: status is informational, the instances table is the truth.
-async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usize, pending: usize, reason: &str) {
+/// Rollout progress for a deployment's status.
+struct Rollup {
+    generation: i64,
+    /// Ready on the current Agent generation for at least minReadySeconds.
+    available: usize,
+    rollout: Option<String>,
+}
+
+async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usize, pending: usize, reason: &str, rollup: Option<Rollup>) {
     let mut status = serde_json::json!({ "scheduled": scheduled, "pending": pending, "phase": if pending == 0 { "Ready" } else { "Pending" } });
     if pending > 0 && !reason.is_empty() {
         status["reason"] = reason.into();
+    }
+    if let Some(r) = rollup {
+        status["agentGeneration"] = r.generation.into();
+        status["available"] = r.available.into();
+        if let Some(msg) = r.rollout {
+            status["phase"] = "RollingOut".into();
+            status["rollout"] = msg.into();
+        }
     }
     if res.status.as_ref() == Some(&status) {
         return;

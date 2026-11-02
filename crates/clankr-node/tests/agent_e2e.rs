@@ -69,6 +69,7 @@ impl Env {
             instance: format!("{agent}-i1"),
             kennel: "kennel".into(),
             kennel_root: None,
+            ready: None,
         };
         tokio::spawn(run_instance(Client::new(&self.base, TOKEN, NS), cfg, rx));
         tx

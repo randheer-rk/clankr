@@ -120,6 +120,7 @@ async fn python_agent_runs_sandboxed_in_a_kennel_container() {
         instance: format!("researcher-{}", std::process::id()),
         kennel: kbin.clone(),
         kennel_root: Some(kroot.clone()),
+        ready: None,
     };
     tokio::spawn(run_instance(Client::new(&base, TOKEN, NS), cfg, rx));
 

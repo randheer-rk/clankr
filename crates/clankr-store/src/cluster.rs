@@ -33,6 +33,16 @@ pub struct Instance {
     pub cpus: f64,
     pub note: Option<String>,
     pub agent_generation: i64,
+    /// Ready at this epoch (reported by its node), and since when.
+    pub ready_epoch: Option<i64>,
+    pub ready_since: Option<DateTime<Utc>>,
+}
+
+impl Instance {
+    /// Ready on its current placement for at least `min_ready`.
+    pub fn available(&self, min_ready: chrono::Duration) -> bool {
+        self.node.is_some() && self.ready_epoch == Some(self.epoch) && self.ready_since.is_some_and(|t| Utc::now() - t >= min_ready)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
@@ -142,8 +152,29 @@ impl Store {
         self.instances_on(name).await
     }
 
+    /// Records a node's view of its instances. A report counts only for the epoch it names
+    /// and only for instances still placed on that node; `ready_since` keeps the first moment.
+    pub async fn report_readiness(&self, node: &str, reports: &[(String, i64, bool)]) -> Result<(), ApiError> {
+        for (id, epoch, ready) in reports {
+            sqlx::query(
+                "update instances set
+                     ready_since = case when $4 then (case when ready_epoch = $3 then coalesce(ready_since, now()) else now() end) end,
+                     ready_epoch = case when $4 then $3 end
+                 where id = $1 and node = $2 and epoch = $3",
+            )
+            .bind(id)
+            .bind(node)
+            .bind(epoch)
+            .bind(ready)
+            .execute(self.pool())
+            .await
+            .map_err(db)?;
+        }
+        Ok(())
+    }
+
     pub async fn instances_on(&self, node: &str) -> Result<Vec<Instance>, ApiError> {
-        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation from instances where node = $1 order by id")
+        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since from instances where node = $1 order by id")
             .bind(node)
             .fetch_all(self.pool())
             .await
@@ -155,12 +186,12 @@ impl Store {
     }
 
     pub async fn instances(&self) -> Result<Vec<Instance>, ApiError> {
-        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation from instances order by id").fetch_all(self.pool()).await.map_err(db)
+        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since from instances order by id").fetch_all(self.pool()).await.map_err(db)
     }
 
     /// Where an instance is placed right now: (node, epoch), or None if unknown/unplaced.
     pub async fn instance_placement(&self, id: &str) -> Result<Option<Instance>, ApiError> {
-        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation from instances where id = $1")
+        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since from instances where id = $1")
             .bind(id)
             .fetch_optional(self.pool())
             .await

@@ -253,6 +253,33 @@ pub struct DeploymentSpec {
     /// Only nodes whose labels include all of these.
     #[serde(default)]
     pub node_selector: BTreeMap<String, String>,
+    #[serde(default)]
+    pub rollout: Rollout,
+}
+
+/// How an Agent change rolls through a deployment's instances.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Rollout {
+    /// Instances that may be restarting (or otherwise not ready) at once while rolling.
+    #[serde(default = "one")]
+    pub max_unavailable: u32,
+    /// A restarted instance counts as available after being ready this long.
+    #[serde(default = "five")]
+    pub min_ready_seconds: u32,
+}
+
+impl Default for Rollout {
+    fn default() -> Self {
+        Self { max_unavailable: 1, min_ready_seconds: 5 }
+    }
+}
+
+fn one() -> u32 {
+    1
+}
+fn five() -> u32 {
+    5
 }
 
 pub fn admit_deployment(spec: &serde_json::Value) -> Result<DeploymentSpec, ApiError> {
@@ -262,6 +289,9 @@ pub fn admit_deployment(spec: &serde_json::Value) -> Result<DeploymentSpec, ApiE
     }
     if s.agent.is_empty() {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "agent is required").field("spec.agent"));
+    }
+    if s.rollout.max_unavailable == 0 {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "maxUnavailable must be at least 1, or a rollout could never start").field("spec.rollout.maxUnavailable"));
     }
     Ok(s)
 }

@@ -107,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
             instance: format!("{}-{}", agent, &uuid::Uuid::new_v4().to_string()[..8]),
             kennel: a.kennel.clone(),
             kennel_root: a.kennel_root.clone(),
+            ready: None,
         };
         tasks.push(tokio::spawn(run_instance(client.clone(), cfg, stop_rx.clone())));
     }

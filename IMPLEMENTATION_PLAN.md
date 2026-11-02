@@ -216,4 +216,4 @@ M4 (operations beta):
 
 M5 (gated backlog, in progress):
 - [x] Control-plane HA: nodes take every replica (`--server a,b`) and fail over (heartbeat/renew retry across replicas; agent calls move only when the connection never happened); tested by killing the leading replica mid-work (runs keep finishing ~1 s later, instance untouched, lease moves); runbook docs/runbooks/high-availability.md
-
+- [x] Rolling restarts: nodes report instance readiness in heartbeats (epoch-scoped); AgentDeployment `rollout.maxUnavailable`/`minReadySeconds`; scheduler paces Agent-change restarts, stalls a bad release after one instance with `RollingOut` status; e2e proves ≤1 down during a 3-replica rollout

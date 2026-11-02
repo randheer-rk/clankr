@@ -284,11 +284,12 @@ impl Client {
     }
 
     /// Heartbeat over mTLS; returns this node's current assignments with fresh identity tokens.
-    pub async fn node_heartbeat(servers: &Endpoints, tls: &NodeTls, name: &str) -> Result<Vec<Assignment>, ApiError> {
+    /// `report` is `{"instances": [{id, epoch, ready}]}`.
+    pub async fn node_heartbeat(servers: &Endpoints, tls: &NodeTls, name: &str, report: &Value) -> Result<Vec<Assignment>, ApiError> {
         let http = tls.client(Duration::from_secs(10));
         let v = servers
             .first_reachable(|base| {
-                let rb = http.post(format!("{base}/v1/nodes/{name}/heartbeat"));
+                let rb = http.post(format!("{base}/v1/nodes/{name}/heartbeat")).json(report);
                 async move { answer(rb.send().await.map_err(unreachable)?, "heartbeat").await }
             })
             .await?;
