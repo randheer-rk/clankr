@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 
-use clankr_types::agent::{ImagePolicySpec, Runtime, image_allowed};
+use clankr_types::agent::{ImagePolicySpec, Runtime, SandboxClass, image_allowed};
 use clankr_types::{ApiError, ErrorCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -39,6 +39,9 @@ pub struct Container {
     pub cpus: f64,
     #[serde(default = "default_pids")]
     pub pids: i64,
+    /// kennel runtime class: container (default), gvisor or microvm.
+    #[serde(default, skip_serializing_if = "SandboxClass::is_container")]
+    pub runtime: SandboxClass,
 }
 
 fn default_memory() -> u64 {
@@ -71,13 +74,13 @@ fn tool_err(msg: impl Into<String>) -> ApiError {
 impl Sandbox {
     /// `kennel run` for `c`, stdin/stdout piped. Killed (container and all) when dropped.
     async fn spawn(&self, c: &Container, policies: &[(String, ImagePolicySpec)]) -> Result<(tokio::process::Child, tempdir::Dir), ApiError> {
-        let keys = image_allowed(policies, &Runtime::Oci { image: c.image.clone() }).map_err(|e| ApiError::new(ErrorCode::Forbidden, format!("refusing to run: {e}")))?;
+        let keys = image_allowed(policies, &Runtime::Oci { image: c.image.clone(), class: c.runtime }).map_err(|e| ApiError::new(ErrorCode::Forbidden, format!("refusing to run: {e}")))?;
         let dir = tempdir::Dir::new().map_err(|e| tool_err(format!("sandbox: {e}")))?;
         let mut cmd = tokio::process::Command::new(&self.kennel);
         if let Some(root) = &self.root {
             cmd.arg("--root").arg(root);
         }
-        cmd.args(["run", "--network", "none", "--name", &format!("tool-{}", uuid::Uuid::new_v4().simple())])
+        cmd.args(["run", "--runtime", c.runtime.kennel_arg(), "--network", "none", "--name", &format!("tool-{}", uuid::Uuid::new_v4().simple())])
             .args(["--memory", &c.memory_mib.to_string(), "--cpus", &c.cpus.to_string(), "--pids", &c.pids.to_string()]);
         for (k, v) in &c.env {
             cmd.arg("-e").arg(format!("{k}={v}"));

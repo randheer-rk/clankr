@@ -70,7 +70,7 @@ pub(crate) async fn admit_tracking(store: &Store, r: &Resource) -> Result<(), Ap
     if !img.stages.contains(&t.stage) {
         return Err(bad("spec.track.stage", format!("AgentImage {} has no stage {:?} (stages: {})", t.image, t.stage, img.stages.join(", "))));
     }
-    let clankr_types::agent::Runtime::Oci { image: running } = &a.runtime else {
+    let clankr_types::agent::Runtime::Oci { image: running, .. } = &a.runtime else {
         return Err(bad("spec.runtime", "tracking an AgentImage needs the oci runtime"));
     };
     let want = current(store, &r.metadata.namespace, &t.image, &t.stage).await?.ok_or_else(|| bad("spec.track", format!("nothing has been promoted to {}/{} yet", t.image, t.stage)))?;

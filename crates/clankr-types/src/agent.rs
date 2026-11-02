@@ -109,6 +109,9 @@ pub struct ImagePolicySpec {
     /// Allow the unsandboxed `process` runtime (S0, development only) here.
     #[serde(default)]
     pub allow_process_runtime: bool,
+    /// OCI runtime classes allowed here (empty = any), e.g. `[microvm]` for untrusted code.
+    #[serde(default)]
+    pub runtime_classes: Vec<SandboxClass>,
 }
 
 pub fn admit_image_policy(spec: &serde_json::Value) -> Result<ImagePolicySpec, ApiError> {
@@ -134,7 +137,10 @@ pub fn image_allowed(policies: &[(String, ImagePolicySpec)], runtime: &Runtime) 
                 return Err(format!("ImagePolicy {name} doesn't allow the unsandboxed process runtime"));
             }
         }
-        Runtime::Oci { image } => {
+        Runtime::Oci { image, class } => {
+            if let Some((name, p)) = policies.iter().find(|(_, p)| !p.runtime_classes.is_empty() && !p.runtime_classes.contains(class)) {
+                return Err(format!("ImagePolicy {name} requires runtime class {:?}", p.runtime_classes.iter().map(|c| c.kennel_arg()).collect::<Vec<_>>()));
+            }
             let repo = image.split('@').next().unwrap_or(image);
             for (name, p) in policies {
                 if !p.allowed_repositories.is_empty() && !p.allowed_repositories.iter().any(|pre| repo.starts_with(pre.as_str())) {
@@ -274,7 +280,39 @@ pub enum Runtime {
         working_dir: Option<String>,
     },
     /// S1+: an OCI image the node runs through `kennel` (sandboxed, rootless).
-    Oci { image: String },
+    Oci {
+        image: String,
+        /// Isolation from the node's kernel; nodes advertise the classes they can run.
+        #[serde(default, skip_serializing_if = "SandboxClass::is_container")]
+        class: SandboxClass,
+    },
+}
+
+/// kennel runtime classes, weakest to strongest isolation (PRD §13.4 S1–S3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxClass {
+    /// Namespaces, seccomp and cgroups on the host kernel.
+    #[default]
+    Container,
+    /// gVisor's user-space kernel between the workload and the host.
+    Gvisor,
+    /// A Firecracker microVM with its own kernel.
+    Microvm,
+}
+
+impl SandboxClass {
+    pub fn is_container(&self) -> bool {
+        *self == SandboxClass::Container
+    }
+    /// `kennel run --runtime` value.
+    pub fn kennel_arg(self) -> &'static str {
+        match self {
+            SandboxClass::Container => "container",
+            SandboxClass::Gvisor => "gvisor",
+            SandboxClass::Microvm => "microvm",
+        }
+    }
 }
 
 pub fn admit_agent(spec: &serde_json::Value) -> Result<AgentSpec, ApiError> {
@@ -283,7 +321,7 @@ pub fn admit_agent(spec: &serde_json::Value) -> Result<AgentSpec, ApiError> {
         Runtime::Process { command, .. } if command.is_empty() => {
             return Err(ApiError::new(ErrorCode::InvalidSpec, "process runtime needs a command").field("spec.runtime.command"));
         }
-        Runtime::Oci { image } if !image.contains("@sha256:") => {
+        Runtime::Oci { image, .. } if !image.contains("@sha256:") => {
             // deploy by digest only (CL-24-08); tags are mutable
             return Err(ApiError::new(ErrorCode::InvalidSpec, "image must be pinned by digest (name@sha256:...)").field("spec.runtime.image"));
         }
@@ -441,7 +479,9 @@ impl Runtime {
     pub fn kind(&self) -> &'static str {
         match self {
             Runtime::Process { .. } => "process",
-            Runtime::Oci { .. } => "oci",
+            Runtime::Oci { class: SandboxClass::Container, .. } => "oci",
+            Runtime::Oci { class: SandboxClass::Gvisor, .. } => "oci/gvisor",
+            Runtime::Oci { class: SandboxClass::Microvm, .. } => "oci/microvm",
         }
     }
 }
@@ -460,11 +500,23 @@ mod image_policy_tests {
         let team = admit_image_policy(&json!({"allowedRepositories": ["registry.example/team/"], "requireSignature": true, "keys": [KEY]})).unwrap();
         let open = admit_image_policy(&json!({"allowProcessRuntime": true})).unwrap();
         let ps = vec![("team".to_owned(), team), ("open".to_owned(), open)];
-        let oci = |i: &str| Runtime::Oci { image: i.into() };
+        let oci = |i: &str| Runtime::Oci { image: i.into(), class: SandboxClass::Container };
         assert_eq!(image_allowed(&ps, &oci("registry.example/team/a@sha256:00")).unwrap(), [KEY]);
         assert!(image_allowed(&ps, &oci("docker.io/evil/a@sha256:00")).unwrap_err().contains("ImagePolicy team allows only"));
         let process = Runtime::Process { command: vec!["sh".into()], env: Default::default(), working_dir: None };
         assert!(image_allowed(&ps, &process).unwrap_err().contains("ImagePolicy team doesn't allow"), "every policy must allow process runtimes");
         assert!(image_allowed(&[], &process).unwrap().is_empty(), "no policy, no restriction");
+    }
+
+    #[test]
+    fn runtime_classes() {
+        let a = admit_agent(&serde_json::json!({"runtime": {"type": "oci", "image": format!("r/a@sha256:{}", "0".repeat(64)), "class": "microvm"}})).unwrap();
+        assert_eq!(a.runtime.kind(), "oci/microvm");
+        let plain = admit_agent(&serde_json::json!({"runtime": {"type": "oci", "image": format!("r/a@sha256:{}", "0".repeat(64))}})).unwrap();
+        assert_eq!(plain.runtime.kind(), "oci", "container is the default and keeps the old kind");
+        assert!(serde_json::to_value(&plain.runtime).unwrap().get("class").is_none(), "default class isn't serialized");
+        let strict = vec![("untrusted".to_owned(), admit_image_policy(&serde_json::json!({"runtimeClasses": ["gvisor", "microvm"]})).unwrap())];
+        assert!(image_allowed(&strict, &a.runtime).is_ok());
+        assert!(image_allowed(&strict, &plain.runtime).unwrap_err().contains("requires runtime class"));
     }
 }

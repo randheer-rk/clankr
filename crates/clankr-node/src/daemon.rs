@@ -157,13 +157,13 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
         }
         // S1: sandboxed container via kennel (ADR 0007). No network: every call the agent makes
         // goes through the socket. Only the socket dir is writable besides the container's /tmp.
-        Runtime::Oci { image } => {
+        Runtime::Oci { image, class } => {
             let mut c = tokio::process::Command::new(&cfg.kennel);
             if let Some(root) = &cfg.kennel_root {
                 c.arg("--root").arg(root);
             }
             let r = &spec.resources;
-            c.args(["run", "--network", "none", "--name", &cfg.instance])
+            c.args(["run", "--runtime", class.kennel_arg(), "--network", "none", "--name", &cfg.instance])
                 .args(["--memory", &r.memory_mib.to_string(), "--cpus", &r.cpus.to_string(), "--pids", &r.pids.to_string(), "-v"])
                 .arg(format!("{}:{CONTAINER_SOCKET_DIR}", dir.display()))
                 .args(["-e", &format!("CLANKR_SOCKET={CONTAINER_SOCKET_DIR}/agent.sock")])
