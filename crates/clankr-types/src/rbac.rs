@@ -161,6 +161,7 @@ pub fn required(method: &str, path: &str) -> Option<(Option<String>, Perm)> {
         ["v1", "namespaces", n, "workflows", _, "runs"] | ["v1", "namespaces", n, "runs", ..] => (ns(n), if read { RunsRead } else { RunsWrite }),
         ["v1", "namespaces", n, "approvals", ..] => (ns(n), if read { RunsRead } else { ApprovalsDecide }),
         ["v1", "namespaces", n, "tasks" | "models", ..] => (ns(n), WorkExecute),
+        ["v1", "namespaces", n, "instances", _, "checkpoint"] => (ns(n), WorkExecute),
         ["v1", "namespaces", n, "toolclaims", _, "call"] => (ns(n), WorkExecute),
         // snapshots and restores are an operator's tool, not an agent's
         ["v1", "namespaces", n, "contexts", _, "snapshots", ..] => (ns(n), if read { ContextRead } else { ResourcesWrite }),

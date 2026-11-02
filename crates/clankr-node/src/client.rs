@@ -138,6 +138,14 @@ pub struct Assignment {
     /// control planes; then the instance runs the Agent's current spec.
     #[serde(default)]
     pub agent_spec: Option<serde_json::Value>,
+    /// The deployment is hibernating: checkpoint and stop.
+    #[serde(default)]
+    pub hibernate: bool,
+    /// Resuming: this slot's checkpoint and its version.
+    #[serde(default)]
+    pub checkpoint: Option<serde_json::Value>,
+    #[serde(default)]
+    pub checkpoint_version: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -244,6 +252,11 @@ impl Client {
 
     pub async fn complete(&self, l: &Lease, result: Value) -> Result<(), ApiError> {
         self.call(Method::POST, "/tasks/complete", Some(&json!({"runId": l.run_id, "task": l.task, "epoch": l.epoch, "result": result})), None).await.map(drop)
+    }
+
+    /// Hands in an instance's hibernation checkpoint (`supported` false: the agent gave none).
+    pub async fn checkpoint(&self, instance: &str, state: Option<Value>, supported: bool) -> Result<(), ApiError> {
+        self.call(Method::POST, &format!("/instances/{instance}/checkpoint"), Some(&json!({"state": state, "supported": supported})), None).await.map(drop)
     }
 
     pub async fn fail(&self, l: &Lease, error: &str, retryable: bool) -> Result<(), ApiError> {

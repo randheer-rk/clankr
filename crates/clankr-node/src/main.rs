@@ -109,6 +109,8 @@ async fn main() -> anyhow::Result<()> {
             kennel_root: a.kennel_root.clone(),
             ready: None,
             spec: None,
+            hibernate: None,
+            checkpoint: None,
         };
         tasks.push(tokio::spawn(run_instance(client.clone(), cfg, stop_rx.clone())));
     }

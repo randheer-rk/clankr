@@ -41,6 +41,7 @@ struct Running {
     ready: Arc<std::sync::atomic::AtomicBool>,
     identity: Arc<RwLock<String>>,
     stop: watch::Sender<bool>,
+    hibernate: watch::Sender<bool>,
     task: JoinHandle<Result<()>>,
 }
 
@@ -104,9 +105,16 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
         for a in want {
             if let Some(r) = running.get(&a.id).filter(|r| !r.task.is_finished()) {
                 *r.identity.write().expect("lock") = a.identity.clone();
+                if a.hibernate {
+                    r.hibernate.send_if_modified(|h| !std::mem::replace(h, true));
+                }
                 continue;
             }
+            if a.hibernate {
+                continue; // checkpointed (or never started): stays down until the deployment resumes
+            }
             let (stop, rx) = watch::channel(false);
+            let (hibernate, hib_rx) = watch::channel(false);
             let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let identity = Arc::new(RwLock::new(a.identity.clone()));
             let client = Client::fleet(&servers, http.clone(), &a.namespace, identity.clone());
@@ -119,9 +127,11 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
                 kennel_root: cfg.kennel_root.clone(),
                 ready: Some(ready.clone()),
                 spec: a.agent_spec.clone(),
+                hibernate: Some(hib_rx),
+                checkpoint: a.checkpoint_version.map(|v| (v, a.checkpoint.clone().unwrap_or_default())),
             };
             tracing::info!(instance = %a.id, agent = %a.agent, epoch = a.epoch, "starting instance");
-            running.insert(a.id.clone(), Running { epoch: a.epoch, ready, identity, stop, task: tokio::spawn(run_instance(client, icfg, rx)) });
+            running.insert(a.id.clone(), Running { epoch: a.epoch, ready, identity, stop, hibernate, task: tokio::spawn(run_instance(client, icfg, rx)) });
         }
     }
     stop_all(&mut running).await;

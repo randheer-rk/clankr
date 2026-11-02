@@ -321,6 +321,10 @@ pub struct DeploymentSpec {
     /// Size the deployment from its queue instead of `replicas`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autoscale: Option<Autoscale>,
+    /// Checkpoint every instance and release its compute; durable claims stay bound. Setting
+    /// it back to false resumes, each slot from its checkpoint.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hibernate: bool,
 }
 
 /// Queue-driven scaling: replicas = ceil(tasks ready or in progress / targetTasksPerReplica),

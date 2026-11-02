@@ -170,7 +170,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         .fetch_all(&mut *tx)
         .await
         .map_err(clankr_store::db)?;
-    let instances: Vec<Instance> = sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since from instances order by id for update")
+    let instances: Vec<Instance> = sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, slot, hibernate, hibernate_since, hibernated_at from instances order by id for update")
         .fetch_all(&mut *tx)
         .await
         .map_err(clankr_store::db)?;
@@ -233,6 +233,11 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         let ns = &key.0;
         let mut list = by_dep.get(key).cloned().unwrap_or_default();
         list.sort_by_key(|i| (keep(i, &bindings), i.id.clone()));
+        if spec.hibernate {
+            let h = hibernate(&mut tx, ns, &key.1, &list, &node_state, &mut cands, &mut report).await?;
+            statuses.push((res.clone(), h.0, 0, String::new(), Rollup { generation: *latest, available: 0, rollout: None, autoscale: None, canary: None, hibernation: Some(h.1) }));
+            continue;
+        }
         while list.len() > spec.replicas as usize {
             let i = list.remove(0);
             if keep(i, &bindings) {
@@ -317,8 +322,25 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                 }
             }
         }
+        let mut used: std::collections::BTreeSet<i32> = list.iter().map(|i| i.slot).collect();
         for _ in list.len()..spec.replicas as usize {
             let id = format!("{}-{}", key.1, suffix());
+            let slot = (0..).find(|n| !used.contains(n)).expect("a free slot");
+            used.insert(slot);
+            // resuming: the slot's checkpoint goes to this instance, once
+            let cp: Option<(i64, Option<Value>, bool)> = sqlx::query_as(
+                "update agent_checkpoints set consumed = true where namespace = $1 and deployment = $2 and slot = $3 and not consumed returning version, state, supported",
+            )
+            .bind(ns)
+            .bind(&key.1)
+            .bind(slot)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(clankr_store::db)?;
+            let (cp_state, cp_version) = match cp {
+                Some((v, st, true)) => (Some(st.unwrap_or(Value::Null)), Some(v)),
+                _ => (None, None),
+            };
             let node = match try_place(req, ns, &id, &bindings, &in_use, &cands) {
                 Ok(n) => {
                     assign(&mut cands, &n, req);
@@ -338,7 +360,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
             } else {
                 (plan.fallback_generation(), plan.fallback_spec())
             };
-            sqlx::query("insert into instances (id, namespace, deployment, agent, node, memory_mib, cpus, note, agent_generation, agent_spec) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
+            sqlx::query("insert into instances (id, namespace, deployment, agent, node, memory_mib, cpus, note, agent_generation, agent_spec, slot, checkpoint, checkpoint_version) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)")
                 .bind(&id)
                 .bind(ns)
                 .bind(&key.1)
@@ -349,6 +371,9 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                 .bind(node.is_none().then_some(&reason))
                 .bind(g)
                 .bind(gspec)
+                .bind(slot)
+                .bind(cp_state)
+                .bind(cp_version)
                 .execute(&mut *tx)
                 .await
                 .map_err(clankr_store::db)?;
@@ -362,7 +387,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         let rollout = (updated < list.len() || waiting_rollout > 0).then(|| {
             format!("{updated}/{} on generation {generation}, {available} ready; {waiting_rollout} waiting (maxUnavailable {})", list.len(), spec.rollout.max_unavailable)
         });
-        statuses.push((res.clone(), placed, pending, reason, Rollup { generation: *generation, available, rollout, autoscale: scaled.get(key).copied(), canary: plan.note }));
+        statuses.push((res.clone(), placed, pending, reason, Rollup { generation: *generation, available, rollout, autoscale: scaled.get(key).copied(), canary: plan.note, hibernation: None }));
     }
     tx.commit().await.map_err(clankr_store::db)?;
 
@@ -477,6 +502,7 @@ struct Rollup {
     /// (replicas chosen, queue depth) when autoscaled.
     autoscale: Option<(u32, i64)>,
     canary: Option<Value>,
+    hibernation: Option<Value>,
 }
 
 async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usize, pending: usize, reason: &str, rollup: Option<Rollup>) {
@@ -493,6 +519,10 @@ async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usiz
         if let Some(c) = r.canary {
             status["canary"] = c;
         }
+        if let Some(h) = r.hibernation {
+            status["phase"] = h["phase"].clone();
+            status["hibernation"] = h;
+        }
         if let Some(msg) = r.rollout {
             status["phase"] = "RollingOut".into();
             status["rollout"] = msg.into();
@@ -505,6 +535,65 @@ async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usiz
     if let Ok(cur) = store.get(&res.metadata.namespace, &res.kind, &res.metadata.name).await {
         let _ = store.update_status(&ctx, &cur.metadata.namespace, &cur.kind, &cur.metadata.name, cur.metadata.resource_version, status).await;
     }
+}
+
+/// How long an instance may take to checkpoint before it's released without one.
+const HIBERNATE_TIMEOUT_SECS: i64 = 90;
+
+/// One pass of hibernating a deployment: asks each instance to checkpoint, releases the ones
+/// that did (or can't: node gone, timed out — recorded as no checkpoint). Returns (instances
+/// still up, status.hibernation).
+async fn hibernate(
+    tx: &mut clankr_store::Tx,
+    ns: &str,
+    dep: &str,
+    list: &[&Instance],
+    node_state: &HashMap<&str, (bool, bool)>,
+    cands: &mut [Candidate],
+    report: &mut Report,
+) -> Result<(usize, Value), ApiError> {
+    let now = chrono::Utc::now();
+    let mut up = 0;
+    for i in list {
+        let node_ok = i.node.as_deref().and_then(|n| node_state.get(n)).is_some_and(|s| s.0);
+        let timed_out = i.hibernate_since.is_some_and(|t| now - t > chrono::Duration::seconds(HIBERNATE_TIMEOUT_SECS));
+        if i.hibernated_at.is_none() && node_ok && !timed_out {
+            up += 1;
+            if !i.hibernate {
+                sqlx::query("update instances set hibernate = true, hibernate_since = now(), updated_at = now() where id = $1").bind(&i.id).execute(&mut **tx).await.map_err(clankr_store::db)?;
+            }
+            continue;
+        }
+        if i.hibernated_at.is_none() {
+            // no checkpoint is a recorded fact, so resuming can't pretend it had one
+            tracing::warn!(namespace = %ns, deployment = %dep, instance = %i.id, "released without a checkpoint ({})", if node_ok { "timed out" } else { "node unavailable" });
+            sqlx::query(
+                "insert into agent_checkpoints (namespace, deployment, slot, version, state, supported, instance) values ($1, $2, $3, 1, null, false, $4)
+                 on conflict (namespace, deployment, slot) do update set version = agent_checkpoints.version + 1, state = null, supported = false,
+                     instance = excluded.instance, at = now(), consumed = false",
+            )
+            .bind(ns)
+            .bind(dep)
+            .bind(i.slot)
+            .bind(&i.id)
+            .execute(&mut **tx)
+            .await
+            .map_err(clankr_store::db)?;
+        }
+        if i.node.is_some() {
+            release(cands, i);
+        }
+        delete(tx, &i.id).await?;
+        report.removed += 1;
+    }
+    let slots: Vec<(i32, i64, bool)> = sqlx::query_as("select slot, version, supported from agent_checkpoints where namespace = $1 and deployment = $2 and not consumed order by slot")
+        .bind(ns)
+        .bind(dep)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(clankr_store::db)?;
+    let checkpoints: Vec<Value> = slots.iter().map(|(s, v, ok)| serde_json::json!({"slot": s, "version": v, "checkpointed": ok})).collect();
+    Ok((up, serde_json::json!({"phase": if up == 0 { "Hibernated" } else { "Hibernating" }, "checkpoints": checkpoints})))
 }
 
 /// What a reconcile pass rolls a deployment toward.

@@ -46,6 +46,8 @@ async fn node_refuses_what_policy_forbids() {
             kennel_root: None,
             ready: Some(ready.clone()),
             spec: None,
+            hibernate: None,
+            checkpoint: None,
         };
         let (stop, rx) = tokio::sync::watch::channel(false);
         (ready, stop, tokio::spawn(run_instance(Client::new(&base, TOKEN, NS), cfg, rx)))

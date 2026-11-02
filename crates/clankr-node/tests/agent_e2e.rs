@@ -71,6 +71,8 @@ impl Env {
             kennel_root: None,
             ready: None,
             spec: None,
+            hibernate: None,
+            checkpoint: None,
         };
         tokio::spawn(run_instance(Client::new(&self.base, TOKEN, NS), cfg, rx));
         tx

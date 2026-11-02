@@ -37,6 +37,10 @@ pub struct Config {
     pub ready: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Run this Agent spec rather than the Agent's current one (set by the control plane).
     pub spec: Option<serde_json::Value>,
+    /// Flips to true when the deployment hibernates: checkpoint, then stop for good.
+    pub hibernate: Option<watch::Receiver<bool>>,
+    /// Handed to the agent in Welcome when resuming: (version, state).
+    pub checkpoint: Option<(i64, Value)>,
 }
 
 pub async fn write_frame(w: &mut OwnedWriteHalf, f: &NodeFrame) -> Result<()> {
@@ -208,6 +212,8 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
             instance: cfg.instance.clone(),
             models: spec.models.clone(),
             contexts: spec.contexts.clone(),
+            checkpoint: cfg.checkpoint.as_ref().map(|c| c.1.clone()),
+            checkpoint_version: cfg.checkpoint.as_ref().map(|c| c.0),
         },
     )
     .await?;
@@ -240,9 +246,14 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
     let mut lease_fut: Option<LeaseFuture> = None;
     let mut heartbeat = tokio::time::interval(Duration::from_secs((ttl / 3).max(1)));
     let mut draining = false;
+    let mut hibernate = cfg.hibernate.clone();
+    let mut hibernating = hibernate.as_ref().is_some_and(|h| *h.borrow());
 
     loop {
-        if busy.is_none() && !draining && lease_fut.is_none() {
+        if hibernating && busy.is_none() {
+            return hibernate_now(client, cfg, spec, &who, &mut wr, &mut frames, &mut child).await;
+        }
+        if busy.is_none() && !draining && !hibernating && lease_fut.is_none() {
             let (c, q, owner) = (client.clone(), queue.clone(), who.clone());
             lease_fut = Some(Box::pin(async move { c.lease(&q, &owner, ttl, LEASE_WAIT_SECS).await }));
         }
@@ -328,8 +339,59 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
                 draining = true;
                 lease_fut = None;
             }
+            Ok(()) = async { hibernate.as_mut().unwrap().changed().await }, if hibernate.is_some() && !hibernating => {
+                hibernating = *hibernate.as_ref().unwrap().borrow();
+                if hibernating {
+                    lease_fut = None;
+                    tracing::info!(instance = %cfg.instance, "hibernating: finishing current work, then checkpointing");
+                }
+            }
         }
     }
+}
+
+const HIBERNATE_GRACE: Duration = Duration::from_secs(30);
+
+/// Asks the agent for its checkpoint (still brokering the calls it makes meanwhile), hands it to
+/// the control plane, and ends the instance. An agent that doesn't answer in time is recorded
+/// as having no checkpoint; it never counts as a successful hibernation.
+async fn hibernate_now(
+    client: &Client,
+    cfg: &Config,
+    spec: &AgentSpec,
+    who: &str,
+    wr: &mut OwnedWriteHalf,
+    frames: &mut mpsc::Receiver<Result<AgentFrame>>,
+    child: &mut tokio::process::Child,
+) -> Result<()> {
+    write_frame(wr, &NodeFrame::Hibernate { grace_ms: HIBERNATE_GRACE.as_millis() as u64 }).await.ok();
+    let deadline = tokio::time::sleep(HIBERNATE_GRACE);
+    tokio::pin!(deadline);
+    let state = loop {
+        tokio::select! {
+            f = frames.recv() => match f {
+                Some(Ok(AgentFrame::Checkpoint { state })) => break Some(state),
+                Some(Ok(AgentFrame::Call { call_id, op })) => {
+                    let reply = match broker(client, spec, who, None, op).await {
+                        Ok(v) => NodeFrame::Reply { call_id, ok: Some(v), error: None },
+                        Err(e) => NodeFrame::Reply { call_id, ok: None, error: Some(e) },
+                    };
+                    write_frame(wr, &reply).await.ok();
+                }
+                Some(Ok(_)) => {}
+                _ => break None, // went away without a checkpoint
+            },
+            _ = &mut deadline => break None,
+        }
+    };
+    let supported = state.is_some();
+    if !supported {
+        tracing::warn!(instance = %cfg.instance, "agent gave no checkpoint (SDK without hibernation, or it timed out)");
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    client.checkpoint(&cfg.instance, state.flatten(), supported).await.map_err(|e| anyhow::anyhow!("checkpoint not accepted: {e}"))?;
+    tracing::info!(instance = %cfg.instance, supported, "hibernated");
+    Ok(())
 }
 
 fn take_if(busy: &mut Option<(u64, Lease)>, delivery_id: u64) -> Option<Lease> {

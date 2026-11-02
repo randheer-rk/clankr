@@ -40,6 +40,19 @@ pub struct Instance {
     #[sqlx(default)]
     #[serde(skip)]
     pub agent_spec: Option<sqlx::types::Json<Value>>,
+    #[sqlx(default)]
+    pub slot: i32,
+    #[sqlx(default)]
+    pub hibernate: bool,
+    #[sqlx(default)]
+    pub hibernate_since: Option<DateTime<Utc>>,
+    #[sqlx(default)]
+    pub hibernated_at: Option<DateTime<Utc>>,
+    #[sqlx(default)]
+    #[serde(skip)]
+    pub checkpoint: Option<sqlx::types::Json<Value>>,
+    #[sqlx(default)]
+    pub checkpoint_version: Option<i64>,
 }
 
 impl Instance {
@@ -178,7 +191,7 @@ impl Store {
     }
 
     pub async fn instances_on(&self, node: &str) -> Result<Vec<Instance>, ApiError> {
-        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, agent_spec from instances where node = $1 order by id")
+        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, agent_spec, slot, hibernate, checkpoint, checkpoint_version from instances where node = $1 order by id")
             .bind(node)
             .fetch_all(self.pool())
             .await
@@ -190,7 +203,7 @@ impl Store {
     }
 
     pub async fn instances(&self) -> Result<Vec<Instance>, ApiError> {
-        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since from instances order by id").fetch_all(self.pool()).await.map_err(db)
+        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, slot, hibernate, hibernate_since, hibernated_at, checkpoint_version from instances order by id").fetch_all(self.pool()).await.map_err(db)
     }
 
     /// Where an instance is placed right now: (node, epoch), or None if unknown/unplaced.
@@ -205,6 +218,43 @@ impl Store {
 
 impl Store {
     /// cordon: no new placements. drain: cordon + move instances off (volume-pinned ones stay).
+    /// Stores an instance's hibernation checkpoint under its slot (bumping the slot's version)
+    /// and marks the instance hibernated. Only the instance's current epoch may do this.
+    pub async fn record_checkpoint(&self, ns: &str, instance: &str, epoch: i64, state: Option<&Value>, supported: bool) -> Result<i64, ApiError> {
+        let mut tx = self.pool().begin().await.map_err(db)?;
+        let row: Option<(String, i32, bool)> = sqlx::query_as("select deployment, slot, hibernate from instances where namespace = $1 and id = $2 and epoch = $3 for update")
+            .bind(ns)
+            .bind(instance)
+            .bind(epoch)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?;
+        let Some((deployment, slot, hibernate)) = row else {
+            return Err(ApiError::new(ErrorCode::StaleLease, format!("instance {instance} epoch {epoch} is no longer current")));
+        };
+        if !hibernate {
+            return Err(ApiError::new(ErrorCode::Conflict, format!("instance {instance} wasn't asked to hibernate")));
+        }
+        let version: i64 = sqlx::query_scalar(
+            "insert into agent_checkpoints (namespace, deployment, slot, version, state, supported, instance) values ($1, $2, $3, 1, $4, $5, $6)
+             on conflict (namespace, deployment, slot) do update set version = agent_checkpoints.version + 1, state = excluded.state,
+                 supported = excluded.supported, instance = excluded.instance, at = now(), consumed = false
+             returning version",
+        )
+        .bind(ns)
+        .bind(&deployment)
+        .bind(slot)
+        .bind(state)
+        .bind(supported)
+        .bind(instance)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        sqlx::query("update instances set hibernated_at = now() where id = $1").bind(instance).execute(&mut *tx).await.map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(version)
+    }
+
     pub async fn set_node_maintenance(&self, name: &str, cordoned: bool, draining: bool) -> Result<(), ApiError> {
         let n = sqlx::query("update nodes set cordoned = $2, draining = $3 where name = $1")
             .bind(name)

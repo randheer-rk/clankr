@@ -31,7 +31,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
-ABI_MAJOR, ABI_MINOR = 1, 0
+ABI_MAJOR, ABI_MINOR = 1, 1
 MAX_FRAME = 4 * 1024 * 1024
 __version__ = "0.1.0"
 
@@ -229,6 +229,17 @@ Handler = Callable[[Task, Context], Awaitable[Any]]
 class AgentApp:
     def __init__(self) -> None:
         self.handlers: dict = {}
+        self._on_hibernate: Optional[Callable[[Context], Awaitable[Any]]] = None
+        #: State checkpointed before the last hibernation (None on a fresh start), and its version.
+        self.checkpoint: Any = None
+        self.checkpoint_version: Optional[int] = None
+
+    def on_hibernate(self, fn: Callable[[Context], Awaitable[Any]]) -> Callable[[Context], Awaitable[Any]]:
+        """Registers the hook that returns this agent's portable state (JSON) when its deployment
+        hibernates. It runs after in-flight tasks finish; the value comes back as
+        `app.checkpoint` when the deployment resumes. Without a hook, nothing is kept."""
+        self._on_hibernate = fn
+        return fn
 
     def task(self, node: str = "*") -> Callable[[Handler], Handler]:
         def register(fn: Handler) -> Handler:
@@ -251,6 +262,7 @@ class AgentApp:
             sys.exit(f"node rejected this agent: {welcome['reason']}")
         calls = _Calls(conn)
         ctx = Context(calls, welcome)
+        self.checkpoint, self.checkpoint_version = welcome.get("checkpoint"), welcome.get("checkpointVersion")
         await conn.send({"type": "ready"})
 
         running: set = set()
@@ -270,6 +282,21 @@ class AgentApp:
                 if running:
                     await asyncio.wait(running, timeout=frame.get("graceMs", 5000) / 1000)
                 return
+            elif kind == "hibernate":
+                # in-flight tasks and the hook may still call the node; keep delivering replies
+                pump = asyncio.create_task(self._pump(conn, calls))
+                if running:
+                    await asyncio.wait(running, timeout=frame.get("graceMs", 30000) / 2000)
+                state = await self._on_hibernate(ctx) if self._on_hibernate else None
+                pump.cancel()
+                await conn.send({"type": "checkpoint", "state": state})
+                return
+
+    async def _pump(self, conn: _Conn, calls: "_Calls") -> None:
+        while True:
+            f = await conn.recv()
+            if f["type"] == "reply":
+                calls.resolve(f)
 
     async def _handle(self, conn: _Conn, ctx: Context, d: dict) -> None:
         task = Task(d["runId"], d["task"], d["node"], d["attempt"], d["idempotencyKey"], d["input"])

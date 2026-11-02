@@ -24,6 +24,7 @@ pub fn join_route() -> Router<AppState> {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/nodes", get(list))
+        .route("/v1/namespaces/{ns}/instances/{id}/checkpoint", post(checkpoint))
         .route("/v1/nodes/{name}/heartbeat", post(heartbeat))
         .route("/v1/nodes/{name}/renew", post(renew))
         .route("/v1/nodes/{name}/{action}", post(maintenance))
@@ -86,7 +87,8 @@ async fn heartbeat(State(s): State<AppState>, Extension(ctx): Extension<RequestC
         .into_iter()
         .map(|i| {
             let claims = crate::identity::Claims { ns: i.namespace.clone(), agent: i.agent.clone(), instance: i.id.clone(), node: name.clone(), epoch: i.epoch, exp };
-            json!({ "id": i.id, "namespace": i.namespace, "agent": i.agent, "epoch": i.epoch, "identity": s.signer.issue(&claims), "agentSpec": i.agent_spec.map(|j| j.0) })
+            json!({ "id": i.id, "namespace": i.namespace, "agent": i.agent, "epoch": i.epoch, "identity": s.signer.issue(&claims), "agentSpec": i.agent_spec.map(|j| j.0),
+                "hibernate": i.hibernate, "checkpoint": i.checkpoint.map(|j| j.0), "checkpointVersion": i.checkpoint_version })
         })
         .collect();
     Ok(Json(json!({ "assignments": assignments })))
@@ -132,4 +134,27 @@ async fn renew(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>,
     s.store.rotate_node_credential(&name, &fp, 300.0).await?;
     s.store.audit_in_tx_simple(&ctx, "node renew", &name).await?;
     Ok(Json(json!({ "certificate": cert })))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckpointBody {
+    state: Option<Value>,
+    supported: bool,
+}
+
+/// A hibernating instance hands in its checkpoint, under its own workload identity.
+async fn checkpoint(
+    State(s): State<AppState>,
+    Extension(ctx): Extension<RequestCtx>,
+    headers: axum::http::HeaderMap,
+    Path((ns, id)): Path<(String, String)>,
+    Json(b): Json<CheckpointBody>,
+) -> ApiResult<Json<Value>> {
+    let claims = crate::workload(&s, &ctx, &headers, &ns, None).await?.filter(|c| c.instance == id).ok_or_else(|| ApiError::new(ErrorCode::Forbidden, "only the instance itself (via its node) can checkpoint"))?;
+    if b.state.as_ref().is_some_and(|v| v.to_string().len() > clankr_store::context::MAX_VALUE_BYTES) {
+        return Err(ApiError::new(ErrorCode::QuotaExceeded, "checkpoint too large; keep big state in a volume or the artifact store").into());
+    }
+    let version = s.store.record_checkpoint(&ns, &id, claims.epoch, b.state.as_ref(), b.supported).await?;
+    Ok(Json(json!({"version": version})))
 }

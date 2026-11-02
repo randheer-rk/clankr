@@ -270,7 +270,9 @@ fn node_route_allowed(node: &str, method: &axum::http::Method, path: &str) -> bo
         ["v1", "namespaces", _, "agents", _] => method == axum::http::Method::GET,
         // public keys and repository rules the node enforces at launch
         ["v1", "namespaces", _, "imagepolicies"] => method == axum::http::Method::GET,
-        ["v1", "namespaces", _, "tasks", ..] | ["v1", "namespaces", _, "models", ..] | ["v1", "namespaces", _, "contexts", ..] => true,
+        // contexts: key reads/writes only; snapshots and restores are operator actions
+        ["v1", "namespaces", _, "tasks", ..] | ["v1", "namespaces", _, "models", ..] | ["v1", "namespaces", _, "contexts", _, "keys", ..] => true,
+        ["v1", "namespaces", _, "instances", _, "checkpoint"] => method == axum::http::Method::POST,
         ["v1", "namespaces", _, "toolclaims", _, "call"] => method == axum::http::Method::POST,
         ["v1", "namespaces", _, "mailboxes", _, "messages" | "receive" | "ack" | "nack"] => method == axum::http::Method::POST,
         _ => false,
@@ -531,4 +533,21 @@ struct AuditQuery {
 async fn audit(State(s): State<AppState>, Query(q): Query<AuditQuery>) -> ApiResult<Json<Vec<clankr_store::AuditEvent>>> {
     let limit = q.limit.unwrap_or(500).clamp(1, 5000);
     Ok(Json(if q.latest { s.store.audit_latest(limit).await? } else { s.store.audit_since(q.after, limit).await? }))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::Method;
+
+    #[test]
+    fn node_surface() {
+        let ok = |m: Method, p: &str| super::node_route_allowed("n1", &m, p);
+        assert!(ok(Method::PUT, "/v1/namespaces/a/contexts/mem/keys/k"));
+        assert!(!ok(Method::POST, "/v1/namespaces/a/contexts/mem/snapshots"), "nodes can't snapshot");
+        assert!(!ok(Method::POST, "/v1/namespaces/a/contexts/mem/snapshots/s/restore"), "or restore");
+        assert!(ok(Method::POST, "/v1/namespaces/a/instances/i/checkpoint"));
+        assert!(!ok(Method::GET, "/v1/namespaces/a/instances/i/checkpoint"));
+        assert!(!ok(Method::POST, "/v1/nodes/n2/heartbeat"), "only its own heartbeat");
+        assert!(!ok(Method::POST, "/v1/namespaces/a/runs/r/fork"));
+    }
 }

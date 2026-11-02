@@ -74,6 +74,14 @@ enum Cmd {
         action: String,
         name: String,
     },
+    /// Checkpoint an AgentDeployment's instances and release their compute (--resume to wake it).
+    Hibernate {
+        deployment: String,
+        #[arg(long)]
+        resume: bool,
+        #[arg(short, long, default_value = "default")]
+        namespace: String,
+    },
     /// Context claims: read (now or back then), snapshot, restore.
     Context {
         #[arg(short, long, default_value = "default", global = true)]
@@ -530,6 +538,14 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Usage { namespace, output } => usage(&api, &namespace, output),
         Cmd::Mailbox { namespace, cmd } => mailbox_cmd(&api, &namespace, cmd),
         Cmd::Context { namespace, cmd } => context_cmd(&api, &namespace, cmd),
+        Cmd::Hibernate { deployment, resume, namespace } => {
+            let item = format!("/v1/namespaces/{namespace}/agentdeployments/{deployment}");
+            let mut d: Value = ok(api.req(reqwest::Method::GET, &item).send()?)?.json()?;
+            d["spec"]["hibernate"] = Value::Bool(!resume);
+            ok(api.req(reqwest::Method::PUT, &item).json(&d).send()?)?;
+            println!("agentdeployment/{deployment} {}", if resume { "resuming (each slot from its checkpoint)" } else { "hibernating (watch status.hibernation)" });
+            Ok(())
+        }
         Cmd::Worker { namespace, queue, exec, owner, ttl_seconds, max_tasks } => worker(&api, &namespace, &queue, &exec, &owner, ttl_seconds, max_tasks),
         Cmd::Delete { kind, name, namespace } => {
             let p = resolve(&kind)?;

@@ -11,7 +11,8 @@ use serde_json::Value;
 use crate::ApiError;
 
 pub const ABI_MAJOR: u16 = 1;
-pub const ABI_MINOR: u16 = 0;
+/// 1.1: hibernation (`Hibernate` / `Checkpoint`, checkpoint in `Welcome`).
+pub const ABI_MINOR: u16 = 1;
 /// Bigger payloads go through the artifact store by reference (CL-25-06).
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 
@@ -25,6 +26,8 @@ pub enum AgentFrame {
     Fail { delivery_id: u64, error: String, retryable: bool },
     Call { call_id: u64, op: CallOp },
     Log { level: String, message: String },
+    /// Answer to `Hibernate`: the app's portable state (None: nothing to keep). The agent exits after.
+    Checkpoint { state: Option<Value> },
 }
 
 /// Privileged operations an agent may request; the node authorizes each one.
@@ -92,6 +95,11 @@ pub enum NodeFrame {
         /// ModelClaims and ContextClaims this agent may use.
         models: Vec<String>,
         contexts: Vec<String>,
+        /// Resuming from hibernation: the state this slot checkpointed, and its version.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint_version: Option<i64>,
     },
     Reject { reason: String },
     Deliver {
@@ -112,4 +120,6 @@ pub enum NodeFrame {
         error: Option<ApiError>,
     },
     Shutdown { grace_ms: u64 },
+    /// Finish (no new work is delivered), then reply `Checkpoint` within `grace_ms` and exit.
+    Hibernate { grace_ms: u64 },
 }
