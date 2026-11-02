@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use clankr_store::Store;
 use clankr_store::cluster::{Instance, Leadership, NodeRow};
-use clankr_types::agent::{NodeCapacity, admit_agent, admit_deployment};
+use clankr_types::agent::{Canary, NodeCapacity, admit_agent, admit_deployment};
 use clankr_types::{ApiError, ErrorCode};
 use serde::Serialize;
+use serde_json::Value;
 
 pub const LEASE: &str = "scheduler";
 /// A node missing heartbeats this long is NotReady and its instances are moved.
@@ -105,7 +106,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
             Ok(s) => s,
             Err(_) => continue,
         };
-        let (agent, generation) = match store.get(ns, "Agent", &spec.agent).await.and_then(|a| Ok((admit_agent(&a.spec)?, a.metadata.generation))) {
+        let (agent, generation, agent_json) = match store.get(ns, "Agent", &spec.agent).await.and_then(|a| Ok((admit_agent(&a.spec)?, a.metadata.generation, a.spec))) {
             Ok(a) => a,
             Err(e) => {
                 set_status(store, d, 0, spec.replicas as usize, &format!("agent {}: {}", spec.agent, e.message), None).await;
@@ -119,7 +120,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
             selector: spec.node_selector.clone(),
             claims: agent.volumes.iter().map(|v| v.claim.clone()).collect(),
         };
-        wanted.insert((ns.clone(), d.metadata.name.clone()), (spec, req, d.clone(), generation));
+        wanted.insert((ns.clone(), d.metadata.name.clone()), (spec, req, d.clone(), generation, agent_json));
     }
 
     let mut tx = store.pool().begin().await.map_err(clankr_store::db)?;
@@ -228,7 +229,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
     }
 
     let mut statuses = vec![];
-    for (key, (spec, req, res, generation)) in &wanted {
+    for (key, (spec, req, res, latest, latest_spec)) in &wanted {
         let ns = &key.0;
         let mut list = by_dep.get(key).cloned().unwrap_or_default();
         list.sort_by_key(|i| (keep(i, &bindings), i.id.clone()));
@@ -245,6 +246,13 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         let mut placed = 0;
         // rolling restarts: at most maxUnavailable instances not-ready at a time
         let min_ready = chrono::Duration::seconds(spec.rollout.min_ready_seconds.into());
+        // which generation this pass rolls toward, and how many more instances may move to it
+        let plan = match &spec.rollout.canary {
+            Some(c) => canary(&mut tx, ns, &key.1, c, spec.replicas, *latest, latest_spec, &list, min_ready).await?,
+            None => Plan { generation: *latest, spec: Some(latest_spec.clone()), budget: usize::MAX, stable: None, note: None },
+        };
+        let generation = &plan.generation;
+        let mut budget = plan.budget;
         let mut unavailable = list.iter().filter(|i| !i.available(min_ready)).count();
         let mut waiting_rollout = 0;
         for i in &list {
@@ -258,20 +266,22 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                 set_note(&mut tx, i, note.as_deref()).await?;
                 if i.agent_generation != *generation {
                     let was_available = i.available(min_ready);
-                    if was_available && unavailable >= spec.rollout.max_unavailable as usize {
+                    if budget == 0 || (was_available && unavailable >= spec.rollout.max_unavailable as usize) {
                         waiting_rollout += 1;
                         continue;
                     }
                     if was_available {
                         unavailable += 1;
                     }
+                    budget -= 1;
                     // the Agent changed (new image, env, limits): restart in place on the new spec;
                     // the epoch bump fences the old process like any move
-                    sqlx::query("update instances set epoch = epoch + 1, agent_generation = $2, memory_mib = $3, cpus = $4, updated_at = now() where id = $1")
+                    sqlx::query("update instances set epoch = epoch + 1, agent_generation = $2, memory_mib = $3, cpus = $4, agent_spec = $5, updated_at = now() where id = $1")
                         .bind(&i.id)
                         .bind(generation)
                         .bind(req.memory_mib as i64)
                         .bind(req.cpus)
+                        .bind(&plan.spec)
                         .execute(&mut *tx)
                         .await
                         .map_err(clankr_store::db)?;
@@ -283,10 +293,11 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                 Ok(node) => {
                     assign(&mut cands, &node, req);
                     bind(&mut tx, &mut bindings, &mut in_use, ns, req, &node, &i.id).await?;
-                    sqlx::query("update instances set node = $2, epoch = epoch + 1, note = null, agent_generation = $3, memory_mib = $4, cpus = $5, updated_at = now() where id = $1")
+                    // ponytail: a move keeps the instance's generation and spec; the rollout upgrades it later.
+                    // Resources come from the latest Agent, slightly off for an instance held back by a canary.
+                    sqlx::query("update instances set node = $2, epoch = epoch + 1, note = null, memory_mib = $3, cpus = $4, updated_at = now() where id = $1")
                         .bind(&i.id)
                         .bind(&node)
-                        .bind(generation)
                         .bind(req.memory_mib as i64)
                         .bind(req.cpus)
                         .execute(&mut *tx)
@@ -320,7 +331,14 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                     None
                 }
             };
-            sqlx::query("insert into instances (id, namespace, deployment, agent, node, memory_mib, cpus, note, agent_generation) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
+            // new instances join the target generation while the canary has room, else the stable one
+            let (g, gspec) = if budget > 0 {
+                budget = budget.saturating_sub(1);
+                (*generation, plan.spec.clone())
+            } else {
+                (plan.fallback_generation(), plan.fallback_spec())
+            };
+            sqlx::query("insert into instances (id, namespace, deployment, agent, node, memory_mib, cpus, note, agent_generation, agent_spec) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
                 .bind(&id)
                 .bind(ns)
                 .bind(&key.1)
@@ -329,7 +347,8 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                 .bind(req.memory_mib as i64)
                 .bind(req.cpus)
                 .bind(node.is_none().then_some(&reason))
-                .bind(generation)
+                .bind(g)
+                .bind(gspec)
                 .execute(&mut *tx)
                 .await
                 .map_err(clankr_store::db)?;
@@ -340,10 +359,10 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         let available = list.iter().filter(|i| i.available(min_ready) && i.agent_generation == *generation).count();
         // still rolling while any instance runs an older generation (or hasn't proven ready on this one)
         let updated = list.iter().filter(|i| i.agent_generation == *generation).count();
-        let rollout = (updated < list.len() || (waiting_rollout > 0)).then(|| {
+        let rollout = (updated < list.len() || waiting_rollout > 0).then(|| {
             format!("{updated}/{} on generation {generation}, {available} ready; {waiting_rollout} waiting (maxUnavailable {})", list.len(), spec.rollout.max_unavailable)
         });
-        statuses.push((res.clone(), placed, pending, reason, Rollup { generation: *generation, available, rollout, autoscale: scaled.get(key).copied() }));
+        statuses.push((res.clone(), placed, pending, reason, Rollup { generation: *generation, available, rollout, autoscale: scaled.get(key).copied(), canary: plan.note }));
     }
     tx.commit().await.map_err(clankr_store::db)?;
 
@@ -457,6 +476,7 @@ struct Rollup {
     rollout: Option<String>,
     /// (replicas chosen, queue depth) when autoscaled.
     autoscale: Option<(u32, i64)>,
+    canary: Option<Value>,
 }
 
 async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usize, pending: usize, reason: &str, rollup: Option<Rollup>) {
@@ -470,6 +490,9 @@ async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usiz
         if let Some((replicas, depth)) = r.autoscale {
             status["autoscale"] = serde_json::json!({"replicas": replicas, "queueDepth": depth});
         }
+        if let Some(c) = r.canary {
+            status["canary"] = c;
+        }
         if let Some(msg) = r.rollout {
             status["phase"] = "RollingOut".into();
             status["rollout"] = msg.into();
@@ -481,6 +504,153 @@ async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usiz
     let ctx = clankr_types::RequestCtx { actor: "scheduler".into(), request_id: "reconcile".into() };
     if let Ok(cur) = store.get(&res.metadata.namespace, &res.kind, &res.metadata.name).await {
         let _ = store.update_status(&ctx, &cur.metadata.namespace, &cur.kind, &cur.metadata.name, cur.metadata.resource_version, status).await;
+    }
+}
+
+/// What a reconcile pass rolls a deployment toward.
+struct Plan {
+    generation: i64,
+    /// The Agent spec for `generation`; None only for instances from before specs were recorded.
+    spec: Option<Value>,
+    /// How many more instances may move to `generation` this pass.
+    budget: usize,
+    /// While held by a canary: the release everything else stays on.
+    stable: Option<(i64, Option<Value>)>,
+    /// `status.canary` of the deployment.
+    note: Option<Value>,
+}
+
+impl Plan {
+    fn fallback_generation(&self) -> i64 {
+        self.stable.as_ref().map_or(self.generation, |s| s.0)
+    }
+    fn fallback_spec(&self) -> Option<Value> {
+        self.stable.as_ref().map_or(self.spec.clone(), |s| s.1.clone())
+    }
+}
+
+/// Canary analysis for one deployment (reads and advances its `rollouts` row).
+#[allow(clippy::too_many_arguments)]
+async fn canary(tx: &mut clankr_store::Tx, ns: &str, dep: &str, c: &Canary, replicas: u32, latest: i64, latest_spec: &Value, list: &[&Instance], min_ready: chrono::Duration) -> Result<Plan, ApiError> {
+    let full = Plan { generation: latest, spec: Some(latest_spec.clone()), budget: usize::MAX, stable: None, note: None };
+    type Row = (i64, Option<sqlx::types::Json<Value>>, String, Option<String>, chrono::DateTime<chrono::Utc>);
+    let row: Option<Row> =
+        sqlx::query_as("select stable_generation, stable_spec, phase, reason, started_at from rollouts where namespace = $1 and deployment = $2 and generation = $3")
+            .bind(ns)
+            .bind(dep)
+            .bind(latest)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(clankr_store::db)?;
+    let (stable_gen, stable_spec, phase, reason, started) = match row {
+        Some((g, sp, p, r, t)) => (g, sp.map(|j| j.0), p, r, t),
+        None => {
+            // nothing older is running (a new deployment, or the canary already covers it all): no canary
+            let mut olds: Vec<&&Instance> = list.iter().filter(|i| i.agent_generation != latest).collect();
+            if olds.is_empty() {
+                return Ok(full);
+            }
+            // the stable release is what most of the deployment runs now
+            olds.sort_by_key(|i| std::cmp::Reverse(list.iter().filter(|j| j.agent_generation == i.agent_generation).count()));
+            let g = olds[0].agent_generation;
+            let sp: Option<sqlx::types::Json<Value>> = sqlx::query_scalar("select agent_spec from instances where namespace = $1 and deployment = $2 and agent_generation = $3 and agent_spec is not null limit 1")
+                .bind(ns)
+                .bind(dep)
+                .bind(g)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(clankr_store::db)?
+                .flatten();
+            let sp = sp.map(|j| j.0);
+            sqlx::query("insert into rollouts (namespace, deployment, generation, stable_generation, stable_spec, phase) values ($1, $2, $3, $4, $5, 'Canary')")
+                .bind(ns)
+                .bind(dep)
+                .bind(latest)
+                .bind(g)
+                .bind(&sp)
+                .execute(&mut **tx)
+                .await
+                .map_err(clankr_store::db)?;
+            tracing::info!(namespace = %ns, deployment = %dep, generation = latest, stable = g, "canary started");
+            (g, sp, "Canary".to_owned(), None, chrono::Utc::now())
+        }
+    };
+    let note = |phase: &str, reason: Option<&str>| serde_json::json!({"generation": latest, "stableGeneration": stable_gen, "phase": phase, "reason": reason});
+    match phase.as_str() {
+        "Promoted" => return Ok(Plan { note: Some(note("Promoted", None)), ..full }),
+        "Failed" => return Ok(rollback(latest, stable_gen, stable_spec, note("Failed", reason.as_deref()))),
+        _ => {}
+    }
+
+    let canaries: Vec<&&Instance> = list.iter().filter(|i| i.agent_generation == latest).collect();
+    let want = (c.replicas.min(replicas)) as usize;
+    let now = chrono::Utc::now();
+    let owners: Vec<String> = canaries.iter().map(|i| format!("agent/{}/{}", i.agent, i.id)).collect();
+    let (failed, finished): (i64, i64) = sqlx::query_as(
+        "select count(*) filter (where state = 'failed'), count(*) from tasks
+         where namespace = $1 and lease_owner = any($2) and state in ('completed', 'failed') and finished_at >= $3",
+    )
+    .bind(ns)
+    .bind(&owners)
+    .bind(started)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(clankr_store::db)?;
+    let all_ready = canaries.len() >= want && canaries.iter().all(|i| i.available(min_ready));
+    let verdict = if finished > 0 && finished >= c.min_tasks.max(1) as i64 && failed as f64 / finished as f64 > c.max_failure_ratio {
+        Some(Err(format!("{failed} of {finished} canary tasks failed (max {}%)", (c.max_failure_ratio * 100.0).round())))
+    } else if !all_ready && now - started > chrono::Duration::seconds(c.progress_deadline_seconds.into()) {
+        Some(Err(format!("canary not ready within {}s", c.progress_deadline_seconds)))
+    } else if all_ready
+        && finished >= c.min_tasks as i64
+        && canaries.iter().filter_map(|i| i.ready_since).max().is_some_and(|t| now - t >= min_ready + chrono::Duration::seconds(c.analysis_seconds.into()))
+    {
+        Some(Ok(()))
+    } else {
+        None
+    };
+    let held = Plan {
+        generation: latest,
+        spec: Some(latest_spec.clone()),
+        budget: want.saturating_sub(canaries.len()),
+        stable: Some((stable_gen, stable_spec.clone())),
+        note: Some(note("Canary", Some(&format!("{}/{want} canaries ready; {finished} tasks finished, {failed} failed", canaries.iter().filter(|i| i.available(min_ready)).count())))),
+    };
+    let Some(v) = verdict else { return Ok(held) };
+    let (phase, why) = match &v {
+        Ok(()) => ("Promoted", None),
+        Err(e) => ("Failed", Some(e.as_str())),
+    };
+    sqlx::query("update rollouts set phase = $4, reason = $5, updated_at = now() where namespace = $1 and deployment = $2 and generation = $3")
+        .bind(ns)
+        .bind(dep)
+        .bind(latest)
+        .bind(phase)
+        .bind(why)
+        .execute(&mut **tx)
+        .await
+        .map_err(clankr_store::db)?;
+    Ok(match v {
+        Ok(()) => {
+            tracing::info!(namespace = %ns, deployment = %dep, generation = latest, "canary promoted");
+            Plan { note: Some(note("Promoted", None)), ..full }
+        }
+        Err(e) => {
+            tracing::warn!(namespace = %ns, deployment = %dep, generation = latest, reason = %e, "canary failed; rolling back");
+            rollback(latest, stable_gen, stable_spec, note("Failed", Some(&e)))
+        }
+    })
+}
+
+/// Back to the stable release, or, when its spec predates recording (nodes would fetch the
+/// latest Agent instead), freeze the deployment where it is.
+fn rollback(latest: i64, stable_gen: i64, stable_spec: Option<Value>, mut note: Value) -> Plan {
+    match stable_spec {
+        Some(sp) => Plan { generation: stable_gen, spec: Some(sp), budget: usize::MAX, stable: None, note: Some(note) },
+        None => {
+            note["reason"] = format!("{}; can't roll back automatically (generation {stable_gen}'s spec wasn't recorded), so the rollout is frozen", note["reason"].as_str().unwrap_or_default()).into();
+            Plan { generation: latest, spec: None, budget: 0, stable: None, note: Some(note) }
+        }
     }
 }
 

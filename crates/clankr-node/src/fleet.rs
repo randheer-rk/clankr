@@ -118,6 +118,7 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
                 kennel: cfg.kennel.clone(),
                 kennel_root: cfg.kennel_root.clone(),
                 ready: Some(ready.clone()),
+                spec: a.agent_spec.clone(),
             };
             tracing::info!(instance = %a.id, agent = %a.agent, epoch = a.epoch, "starting instance");
             running.insert(a.id.clone(), Running { epoch: a.epoch, ready, identity, stop, task: tokio::spawn(run_instance(client, icfg, rx)) });

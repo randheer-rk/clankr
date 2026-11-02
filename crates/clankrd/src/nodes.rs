@@ -86,7 +86,7 @@ async fn heartbeat(State(s): State<AppState>, Extension(ctx): Extension<RequestC
         .into_iter()
         .map(|i| {
             let claims = crate::identity::Claims { ns: i.namespace.clone(), agent: i.agent.clone(), instance: i.id.clone(), node: name.clone(), epoch: i.epoch, exp };
-            json!({ "id": i.id, "namespace": i.namespace, "agent": i.agent, "epoch": i.epoch, "identity": s.signer.issue(&claims) })
+            json!({ "id": i.id, "namespace": i.namespace, "agent": i.agent, "epoch": i.epoch, "identity": s.signer.issue(&claims), "agentSpec": i.agent_spec.map(|j| j.0) })
         })
         .collect();
     Ok(Json(json!({ "assignments": assignments })))

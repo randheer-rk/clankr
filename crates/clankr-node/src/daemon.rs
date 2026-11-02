@@ -35,6 +35,8 @@ pub struct Config {
     pub kennel_root: Option<PathBuf>,
     /// Set while the agent has completed its handshake (reported in fleet heartbeats).
     pub ready: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Run this Agent spec rather than the Agent's current one (set by the control plane).
+    pub spec: Option<serde_json::Value>,
 }
 
 pub async fn write_frame(w: &mut OwnedWriteHalf, f: &NodeFrame) -> Result<()> {
@@ -59,7 +61,10 @@ pub async fn read_frame(r: &mut OwnedReadHalf) -> Result<AgentFrame> {
 pub async fn run_instance(client: Client, cfg: Config, mut shutdown: watch::Receiver<bool>) -> Result<()> {
     let mut backoff = Duration::from_secs(1);
     while !*shutdown.borrow() {
-        let spec = admit_agent(&client.agent(&cfg.agent).await?.spec)?;
+        let spec = match &cfg.spec {
+            Some(s) => admit_agent(s)?,
+            None => admit_agent(&client.agent(&cfg.agent).await?.spec)?,
+        };
         let outcome = run_once(&client, &cfg, &spec, &mut shutdown).await;
         if let Some(r) = &cfg.ready {
             r.store(false, std::sync::atomic::Ordering::Relaxed);

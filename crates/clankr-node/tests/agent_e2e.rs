@@ -70,6 +70,7 @@ impl Env {
             kennel: "kennel".into(),
             kennel_root: None,
             ready: None,
+            spec: None,
         };
         tokio::spawn(run_instance(Client::new(&self.base, TOKEN, NS), cfg, rx));
         tx

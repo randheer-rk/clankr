@@ -342,7 +342,7 @@ fn five_minutes() -> u32 {
 }
 
 /// How an Agent change rolls through a deployment's instances.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Rollout {
     /// Instances that may be restarting (or otherwise not ready) at once while rolling.
@@ -351,12 +351,44 @@ pub struct Rollout {
     /// A restarted instance counts as available after being ready this long.
     #[serde(default = "five")]
     pub min_ready_seconds: u32,
+    /// Try a new Agent generation on a few instances first; promote or roll back automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary: Option<Canary>,
 }
 
 impl Default for Rollout {
     fn default() -> Self {
-        Self { max_unavailable: 1, min_ready_seconds: 5 }
+        Self { max_unavailable: 1, min_ready_seconds: 5, canary: None }
     }
+}
+
+/// The rest of the deployment stays on the previous generation while `replicas` canaries run
+/// the new one. Promoted once every canary has been ready for `analysisSeconds` (having
+/// finished at least `minTasks`); rolled back if they aren't ready within
+/// `progressDeadlineSeconds` or more than `maxFailureRatio` of their tasks fail.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Canary {
+    #[serde(default = "one")]
+    pub replicas: u32,
+    #[serde(default = "sixty")]
+    pub analysis_seconds: u32,
+    #[serde(default = "two_minutes")]
+    pub progress_deadline_seconds: u32,
+    #[serde(default = "fifth")]
+    pub max_failure_ratio: f64,
+    #[serde(default)]
+    pub min_tasks: u32,
+}
+
+fn sixty() -> u32 {
+    60
+}
+fn two_minutes() -> u32 {
+    120
+}
+fn fifth() -> f64 {
+    0.2
 }
 
 fn one() -> u32 {
@@ -378,6 +410,11 @@ pub fn admit_deployment(spec: &serde_json::Value) -> Result<DeploymentSpec, ApiE
         && (a.max_replicas == 0 || a.max_replicas > 1000 || a.min_replicas > a.max_replicas || a.target_tasks_per_replica == 0)
     {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "autoscale needs 0 ≤ minReplicas ≤ maxReplicas ≤ 1000, maxReplicas ≥ 1, targetTasksPerReplica ≥ 1").field("spec.autoscale"));
+    }
+    if let Some(c) = &s.rollout.canary
+        && (c.replicas == 0 || !(0.0..=1.0).contains(&c.max_failure_ratio) || c.progress_deadline_seconds == 0)
+    {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "canary needs replicas ≥ 1, progressDeadlineSeconds ≥ 1 and maxFailureRatio in 0..=1").field("spec.rollout.canary"));
     }
     if s.rollout.max_unavailable == 0 {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "maxUnavailable must be at least 1, or a rollout could never start").field("spec.rollout.maxUnavailable"));

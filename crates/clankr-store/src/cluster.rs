@@ -36,6 +36,10 @@ pub struct Instance {
     /// Ready at this epoch (reported by its node), and since when.
     pub ready_epoch: Option<i64>,
     pub ready_since: Option<DateTime<Utc>>,
+    /// The Agent spec this instance runs (selected only for node assignments).
+    #[sqlx(default)]
+    #[serde(skip)]
+    pub agent_spec: Option<sqlx::types::Json<Value>>,
 }
 
 impl Instance {
@@ -174,7 +178,7 @@ impl Store {
     }
 
     pub async fn instances_on(&self, node: &str) -> Result<Vec<Instance>, ApiError> {
-        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since from instances where node = $1 order by id")
+        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, agent_spec from instances where node = $1 order by id")
             .bind(node)
             .fetch_all(self.pool())
             .await

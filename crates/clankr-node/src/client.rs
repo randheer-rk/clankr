@@ -134,6 +134,10 @@ pub struct Assignment {
     pub epoch: i64,
     /// Workload identity token for this instance (short-lived; refreshed every heartbeat).
     pub identity: String,
+    /// The exact Agent spec to run (a canary holds others on an older one). Absent from older
+    /// control planes; then the instance runs the Agent's current spec.
+    #[serde(default)]
+    pub agent_spec: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
