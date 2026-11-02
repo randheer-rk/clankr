@@ -9,8 +9,8 @@
 //   const png = await page.screenshot()          // Buffer
 //   await b.close()
 //
-// The browser runs inside the agent's sandbox, so it has the agent's network: none, unless
-// the deployment grants egress. Chromium's own sandbox is off; kennel is the sandbox.
+// The browser runs inside the agent's sandbox: it reaches only the hosts in Agent.spec.egress,
+// through the node's proxy. Chromium's own sandbox is off; kennel is the sandbox.
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -113,7 +113,10 @@ export async function launch(opts: { args?: string[]; timeoutMs?: number } = {})
   const dir = mkdtempSync(join(tmpdir(), "clankr-chromium-"))
   const proc = spawn(CHROMIUM, [
     "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
-    "--remote-debugging-port=0", "--remote-allow-origins=*", `--user-data-dir=${dir}`, ...(opts.args ?? []), "about:blank",
+    "--remote-debugging-port=0", "--remote-allow-origins=*", `--user-data-dir=${dir}`,
+    // the node's egress proxy, when the Agent lists egress hosts
+    ...(process.env.HTTPS_PROXY ? [`--proxy-server=${process.env.HTTPS_PROXY}`] : []),
+    ...(opts.args ?? []), "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"] })
   const url = await new Promise<string>((ok, err) => {
     let seen = ""

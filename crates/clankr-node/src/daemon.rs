@@ -127,6 +127,16 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
         .collect::<std::io::Result<_>>()?;
     let listener = UnixListener::bind(&sock)?;
     std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o666))?;
+    // egress proxy for the listed hosts (containers only: the process runtime is on the host network)
+    let egress = match (&spec.runtime, spec.egress.is_empty()) {
+        (Runtime::Oci { .. }, false) => {
+            let rules = spec.egress.iter().map(|e| clankr_types::agent::EgressRule::parse(e).map_err(|m| anyhow::anyhow!(m))).collect::<Result<_>>()?;
+            let allow_private = std::env::var("CLANKR_EGRESS_ALLOW_PRIVATE").is_ok_and(|v| v == "1");
+            let h = crate::egress::serve(&dir.join("egress.sock"), crate::egress::Egress { rules, allow_private, who: format!("{}/{}", cfg.namespace, cfg.instance) })?;
+            Some(AbortOnDrop(h))
+        }
+        _ => None,
+    };
 
     // local-path volumes: <work-dir>/volumes/<ns>/<claim>. The parent stays private; the claim dir
     // is world-writable so a non-root agent user (subuid-mapped) can write inside the container.
@@ -174,6 +184,16 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
             }
             for k in &key_files {
                 c.arg("--verify-key").arg(k);
+            }
+            if egress.is_some() {
+                let port = crate::egress::CONTAINER_PORT;
+                let proxy = format!("http://127.0.0.1:{port}");
+                c.arg("--forward").arg(format!("{port}={CONTAINER_SOCKET_DIR}/egress.sock"));
+                for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+                    c.args(["-e", &format!("{k}={proxy}")]);
+                }
+                // Node only honors the proxy variables when asked to
+                c.args(["-e", "NO_PROXY=localhost,127.0.0.1", "-e", "no_proxy=localhost,127.0.0.1", "-e", "NODE_USE_ENV_PROXY=1"]);
             }
             c.arg(image);
             c
@@ -472,5 +492,14 @@ async fn broker(client: &Client, spec: &AgentSpec, who: &str, task: Option<&Leas
             }
             client.context_list(&claim, &prefix, who).await
         }
+    }
+}
+
+/// Stops a background task (the instance's egress proxy) when the instance ends.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }

@@ -41,7 +41,10 @@ app.task("write", async (task, ctx) => {
     const s = connect({ host: "1.1.1.1", port: 53, timeout: 1000 }, () => { s.destroy(); ok("up") })
     s.on("error", () => ok("down")).on("timeout", () => { s.destroy(); ok("down") })
   })
-  return { summary: reply.text, root, network, uid: process.getuid!(), node: process.version }
+  // egress only through the node's proxy, only to listed hosts
+  const allowed = await fetch(`http://127.0.0.2:${process.env.UPSTREAM_PORT}/hello`).then(r => r.text()).catch(e => `error: ${e.cause?.code ?? e.message}`)
+  const refused = await fetch("http://example.com/").then(r => r.status).catch(e => `error: ${e.cause?.code ?? e.message}`)
+  return { summary: reply.text, root, network, uid: process.getuid!(), node: process.version, allowed, refused }
 })
 app.run()
 "#;
@@ -58,6 +61,18 @@ async fn typescript_agent_runs_from_the_node_base_image() {
         eprintln!("SKIPPED: can't pull node:24-slim (offline?)");
         return;
     }
+    // the upstream lives on the host's loopback, so let the proxy reach a private address (dev knob)
+    unsafe { std::env::set_var("CLANKR_EGRESS_ALLOW_PRIVATE", "1") };
+    let up = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
+    let up_port = up.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        while let Ok((mut c, _)) = up.accept().await {
+            let mut b = [0u8; 2048];
+            let _ = c.read(&mut b).await;
+            let _ = c.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 13\r\nconnection: close\r\n\r\nhello, agent!").await;
+        }
+    });
     let base = kennel(&kbin, &kroot, &["build", "-t", "clankr/agent-node:test", repo().join("sdk/typescript").to_str().unwrap()]).unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let ctx_dir = tmp.path().join("agent");
@@ -65,7 +80,7 @@ async fn typescript_agent_runs_from_the_node_base_image() {
     std::fs::write(ctx_dir.join("agent.ts"), AGENT).unwrap();
     std::fs::write(
         ctx_dir.join("Kennelfile"),
-        format!("FROM clankr/agent-node@{}\nCOPY agent.ts /app/agent.ts\nAGENT_ENTRYPOINT [\"node\", \"/app/agent.ts\"]\n", base.rsplit_once('@').unwrap().1),
+        format!("FROM clankr/agent-node@{}\nCOPY agent.ts /app/agent.ts\nENV UPSTREAM_PORT={up_port}\nAGENT_ENTRYPOINT [\"node\", \"/app/agent.ts\"]\n", base.rsplit_once('@').unwrap().1),
     )
     .unwrap();
     let image = kennel(&kbin, &kroot, &["build", "-t", "ts/writer:test", ctx_dir.to_str().unwrap()]).unwrap();
@@ -84,7 +99,7 @@ async fn typescript_agent_runs_from_the_node_base_image() {
     for r in [
         res("ProviderConnection", "mock", json!({"provider": "mock", "allowedModels": ["mock-1"]})),
         res("ModelClaim", "default", json!({"providerConnection": "mock", "model": "mock-1"})),
-        res("Agent", "writer", json!({"runtime": {"type": "oci", "image": pinned}, "models": ["default"], "taskTtlSeconds": 30, "resources": {"memoryMiB": 256, "cpus": 0.5, "pids": 64}})),
+        res("Agent", "writer", json!({"runtime": {"type": "oci", "image": pinned}, "models": ["default"], "egress": [format!("127.0.0.2:{up_port}")], "taskTtlSeconds": 30, "resources": {"memoryMiB": 256, "cpus": 0.5, "pids": 64}})),
         res("Workflow", "wf", json!({"entrypoint": "write", "nodes": {"write": {"type": "agent", "agentRef": "writer"}}})),
     ] {
         store.create(&rctx, r).await.unwrap();
@@ -122,4 +137,7 @@ async fn typescript_agent_runs_from_the_node_base_image() {
     assert_eq!(out["network"], "down", "{out}");
     assert_eq!(out["uid"], 65534, "{out}");
     assert!(out["node"].as_str().unwrap().starts_with("v24."), "{out}");
+    assert_eq!(out["allowed"], "hello, agent!", "listed host reached through the node's proxy: {out}");
+    // Node tunnels every proxied request with CONNECT, so the proxy's 403 surfaces as a failed tunnel
+    assert!(out["refused"].as_str().is_some_and(|r| r.starts_with("error")), "unlisted host refused by the proxy: {out}");
 }

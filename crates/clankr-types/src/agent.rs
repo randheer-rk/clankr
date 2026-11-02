@@ -35,6 +35,47 @@ pub struct AgentSpec {
     /// AgentMailboxes this agent may send to and receive from.
     #[serde(default)]
     pub mailboxes: Vec<String>,
+    /// Hosts the agent may reach, through the node's egress proxy: `host`, `*.domain` or
+    /// `host:port` (no port = 443 and 80). Empty: no network at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub egress: Vec<String>,
+}
+
+/// One `Agent.spec.egress` entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EgressRule {
+    /// Lowercase; `*.example.com` matches subdomains only.
+    pub host: String,
+    pub port: Option<u16>,
+}
+
+impl EgressRule {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let (host, port) = match s.rsplit_once(':') {
+            Some((h, p)) if !h.contains(':') => (h, Some(p.parse::<u16>().map_err(|_| format!("{s:?}: bad port"))?)),
+            _ => (s, None),
+        };
+        let host = host.to_ascii_lowercase();
+        let name = host.strip_prefix("*.").unwrap_or(&host);
+        let ok = !name.is_empty() && name.split('.').all(|l| !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+        if !ok || name.contains('*') {
+            return Err(format!("{s:?}: want host, *.domain or host:port"));
+        }
+        Ok(Self { host, port })
+    }
+
+    pub fn matches(&self, host: &str, port: u16) -> bool {
+        let host = host.to_ascii_lowercase();
+        let host_ok = match self.host.strip_prefix("*.") {
+            Some(domain) => host.ends_with(&format!(".{domain}")),
+            None => host == self.host,
+        };
+        host_ok && self.port.map_or(port == 443 || port == 80, |p| p == port)
+    }
+}
+
+pub fn egress_allowed(rules: &[EgressRule], host: &str, port: u16) -> bool {
+    rules.iter().any(|r| r.matches(host, port))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -339,6 +380,9 @@ pub fn admit_agent(spec: &serde_json::Value) -> Result<AgentSpec, ApiError> {
             return Err(ApiError::new(ErrorCode::InvalidSpec, format!("claim {} mounted twice", v.claim)).field(format!("spec.volumes[{i}].claim")));
         }
     }
+    for (i, e) in s.egress.iter().enumerate() {
+        EgressRule::parse(e).map_err(|m| ApiError::new(ErrorCode::InvalidSpec, m).field(format!("spec.egress[{i}]")))?;
+    }
     if !(5..=3600).contains(&s.task_ttl_seconds) {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "taskTtlSeconds must be 5..=3600").field("spec.taskTtlSeconds"));
     }
@@ -518,5 +562,18 @@ mod image_policy_tests {
         let strict = vec![("untrusted".to_owned(), admit_image_policy(&serde_json::json!({"runtimeClasses": ["gvisor", "microvm"]})).unwrap())];
         assert!(image_allowed(&strict, &a.runtime).is_ok());
         assert!(image_allowed(&strict, &plain.runtime).unwrap_err().contains("requires runtime class"));
+    }
+
+    #[test]
+    fn egress_rules() {
+        let r = |s: &str| EgressRule::parse(s).unwrap();
+        assert!(r("API.github.com").matches("api.github.com", 443));
+        assert!(r("api.github.com").matches("api.github.com", 80) && !r("api.github.com").matches("api.github.com", 22));
+        assert!(r("*.example.com").matches("a.b.example.com", 443) && !r("*.example.com").matches("example.com", 443));
+        assert!(!r("*.example.com").matches("evilexample.com", 443), "suffix match is on a label boundary");
+        assert!(r("db.internal:5432").matches("db.internal", 5432) && !r("db.internal:5432").matches("db.internal", 443));
+        for bad in ["", "*", "a..b", "x:99999", "a*.b", "http://x"] {
+            assert!(EgressRule::parse(bad).is_err(), "{bad}");
+        }
     }
 }
