@@ -48,6 +48,9 @@ struct Args {
     /// kennel image store for sandboxed tools (default: kennel's own).
     #[arg(long, env = "CLANKR_TOOL_KENNEL_ROOT")]
     tool_kennel_root: Option<PathBuf>,
+    /// Ship the audit chain off-site as it's written: file:///path.jsonl or https://receiver.
+    #[arg(long, env = "CLANKR_AUDIT_EXPORT")]
+    audit_export: Option<String>,
     /// Directory with pg_dump/pg_restore (default: PATH, or the embedded server's with --dev).
     #[arg(long, env = "CLANKR_PG_BIN", global = true)]
     pg_bin: Option<PathBuf>,
@@ -74,6 +77,9 @@ enum Cmd {
     },
     /// Check a database against a backup's manifest (audit chain, secrets, run replay, counts).
     Verify { dir: PathBuf },
+    /// Compare an off-site audit export (JSONL) with the database: exit 1 if rows were removed or
+    /// changed, or the export itself was edited.
+    AuditCheck { export: PathBuf },
     /// Re-encrypt every secret under a new master key and swap `<data-dir>/master.key`. Stop
     /// every clankrd first: running ones hold the old key. The old key is kept as
     /// `master.key.<fingerprint>.old` for restoring older backups.
@@ -144,6 +150,9 @@ async fn main() -> anyhow::Result<()> {
     clankrd::spawn_tool_sweeper(state.gateway.clone());
     // every clankrd runs the loop; the Postgres lease makes exactly one of them the scheduler
     let holder = format!("{}-{}", std::fs::read_to_string("/etc/hostname").unwrap_or_default().trim(), std::process::id());
+    if let Some(dest) = args.audit_export.clone() {
+        clankrd::audit_export::spawn(store.clone(), holder.clone(), dest, std::time::Duration::from_secs(2));
+    }
     clankrd::scheduler::spawn(store, holder, std::time::Duration::from_secs(1));
     let app = clankrd::router(state);
 
@@ -179,6 +188,23 @@ async fn run_maintenance(cmd: Cmd, url: &str, data_dir: &std::path::Path, pg_bin
         }
     };
     match cmd {
+        Cmd::AuditCheck { export } => {
+            let store = Store::connect(url).await.context("connect metadata store")?;
+            let c = clankrd::audit_export::audit_check(&store, &std::fs::read_to_string(&export).with_context(|| format!("read {}", export.display()))?).await?;
+            println!("{} rows in the export", c.exported);
+            if let Some(s) = c.export_broken_at {
+                println!("FAIL  the export's own chain breaks at seq {s} (it was edited or is incomplete)");
+            }
+            if !c.missing.is_empty() {
+                println!("FAIL  {} exported rows are gone from the database: {:?}", c.missing.len(), c.missing);
+            }
+            if !c.altered.is_empty() {
+                println!("FAIL  {} exported rows differ in the database: {:?}", c.altered.len(), c.altered);
+            }
+            anyhow::ensure!(c.ok(), "the database's audit log doesn't match its off-site copy");
+            println!("ok    every exported row is in the database, unchanged");
+            Ok(())
+        }
         Cmd::RotateMasterKey { new_key_file } => {
             anyhow::ensure!(std::env::var_os("CLANKR_MASTER_KEY").is_none(), "the key comes from CLANKR_MASTER_KEY; rotation swaps <data-dir>/master.key, so move the key there first");
             let store = Store::connect(url).await.context("connect metadata store")?;

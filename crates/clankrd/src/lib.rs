@@ -31,6 +31,7 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 mod approvals;
+pub mod audit_export;
 pub mod authz;
 pub mod backup;
 mod contexts;

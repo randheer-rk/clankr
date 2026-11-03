@@ -228,6 +228,21 @@ impl Store {
     }
 
     /// Audit records after `after_seq`, oldest first.
+    /// Where the off-site export to `dest` has got to: (seq, hash) of the last row sent.
+    pub async fn audit_export_cursor(&self, dest: &str) -> Result<(i64, String), ApiError> {
+        sqlx::query("insert into audit_exports (dest) values ($1) on conflict do nothing").bind(dest).execute(self.pool()).await.map_err(db)?;
+        sqlx::query_as("select seq, hash from audit_exports where dest = $1").bind(dest).fetch_one(self.pool()).await.map_err(db)
+    }
+
+    pub async fn set_audit_export_cursor(&self, dest: &str, seq: i64, hash: &str) -> Result<(), ApiError> {
+        sqlx::query("update audit_exports set seq = $2, hash = $3 where dest = $1").bind(dest).bind(seq).bind(hash).execute(self.pool()).await.map(drop).map_err(db)
+    }
+
+    /// The audit row at `seq`, if there is one.
+    pub async fn audit_at(&self, seq: i64) -> Result<Option<AuditEvent>, ApiError> {
+        sqlx::query_as("select * from audit_events where seq = $1").bind(seq).fetch_optional(self.pool()).await.map_err(db)
+    }
+
     pub async fn audit_since(&self, after_seq: i64, limit: i64) -> Result<Vec<AuditEvent>, ApiError> {
         audit::since(&self.pool, after_seq, limit).await
     }

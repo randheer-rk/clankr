@@ -28,6 +28,11 @@ pub struct AuditEvent {
 }
 
 impl AuditEvent {
+    /// Whether `hash` is right for the rest of the record.
+    pub fn hash_ok(&self) -> bool {
+        self.compute_hash() == self.hash
+    }
+
     /// sha256(prev_hash || JSON of every field except `hash`). Field order is the struct order.
     fn compute_hash(&self) -> String {
         let mut body = serde_json::to_value(self).expect("serializable");
