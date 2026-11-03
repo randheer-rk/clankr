@@ -10,4 +10,4 @@ Status: accepted (2026-11-03)
 - **Gates:**
   1. Runtime class `gvisor` or `microvm`. Direct network access calls for the stronger sandboxes, so plain containers are refused at admission (and by kennel).
   2. `kind: NetworkPolicy { allowDirect, allowCidrs }`. At least one must exist, and every policy in the namespace must allow it. The private CIDRs opened are those every policy lists. This is checked when the Agent is saved (a refusal is an API error, audited like any write) and again by the node before every launch.
-- A direct-network agent gets no proxy. Its traffic isn't per-connection logged the way proxy egress is; the launch is logged, and the policy is the control.
+- A direct-network agent gets no proxy. Each new connection is still logged by the node (`direct egress`: protocol, destination, and the filter's accept or drop), from kennel's `--nat-log` (nft's trace of each connection's first packet). Byte counts aren't recorded, unlike proxy egress.

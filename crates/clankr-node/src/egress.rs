@@ -155,6 +155,34 @@ async fn handle(mut c: UnixStream, e: &Egress) -> Result<()> {
     Ok(())
 }
 
+/// Follows kennel's `--nat-log` (`PROTO ADDR:PORT accept|drop` per new connection) for a
+/// direct-network agent, logging each line until aborted.
+pub fn tail_nat_log(path: std::path::PathBuf, who: String) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let Ok(mut f) = tokio::fs::File::open(&path).await else { return };
+        let mut partial = String::new();
+        loop {
+            // the file position carries over: each read returns only what kennel appended
+            let mut new = vec![];
+            if f.read_to_end(&mut new).await.is_ok_and(|n| n > 0) {
+                partial.push_str(&String::from_utf8_lossy(&new));
+                while let Some(i) = partial.find('\n') {
+                    let line: String = partial.drain(..=i).collect();
+                    let mut f = line.split_whitespace();
+                    if let (Some(proto), Some(dest), Some(verdict)) = (f.next(), f.next(), f.next()) {
+                        if verdict == "drop" {
+                            tracing::warn!(%who, proto, dest, verdict, "direct egress");
+                        } else {
+                            tracing::info!(%who, proto, dest, verdict, "direct egress");
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

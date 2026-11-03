@@ -148,6 +148,16 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
         }
         _ => None,
     };
+    // direct network: kennel logs each new connection with the filter's verdict; logged here
+    // like the proxy's connections
+    let nat_log = dir.join("nat.log");
+    let _nat_tail = match direct_cidrs {
+        Some(_) => {
+            std::fs::write(&nat_log, "")?;
+            Some(AbortOnDrop(crate::egress::tail_nat_log(nat_log.clone(), format!("{}/{}", cfg.namespace, cfg.instance))))
+        }
+        None => None,
+    };
 
     // local-path volumes: <work-dir>/volumes/<ns>/<claim>. The parent stays private; the claim dir
     // is world-writable so a non-root agent user (subuid-mapped) can write inside the container.
@@ -210,6 +220,9 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
             }
             for cidr in direct_cidrs.iter().flatten() {
                 c.arg("--nat-allow").arg(cidr);
+            }
+            if direct_cidrs.is_some() {
+                c.arg("--nat-log").arg(&nat_log);
             }
             if egress.is_some() {
                 let port = crate::egress::CONTAINER_PORT;

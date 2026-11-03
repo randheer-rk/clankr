@@ -189,6 +189,10 @@ async fn run_agent_with(class: &str, direct: bool) {
         tokio::time::sleep(Duration::from_millis(100)).await;
         run = engine.get(NS, id).await.unwrap();
     }
+    // direct mode: the node's per-connection log (kennel --nat-log), found by instance name
+    let nat_log = std::env::var_os("XDG_RUNTIME_DIR").and_then(|r| {
+        std::fs::read_dir(r).ok()?.filter_map(|e| e.ok()).map(|e| e.path().join(format!("writer-{class}-{}", std::process::id())).join("nat.log")).find(|p| p.exists())
+    });
     stop.send(true).unwrap();
     assert_eq!(run.status, clankr_engine::RunStatus::Succeeded, "{:?}", run.state.error);
     let out = &run.state.data["write"];
@@ -198,6 +202,8 @@ async fn run_agent_with(class: &str, direct: bool) {
         assert_eq!(out["network"], "up", "direct: its own outbound network: {out}");
         assert!(out["allowed"].as_str().is_some_and(|a| a.starts_with("error")), "direct: no proxy, and private hosts are dropped: {out}");
         assert_eq!(out["refused"], 200, "direct: public hosts reachable without the allowlist: {out}");
+        let logged = nat_log.map(|p| std::fs::read_to_string(p).unwrap_or_default()).unwrap_or_default();
+        assert!(logged.contains("tcp 1.1.1.1:53 accept"), "direct: connections logged with their verdict: {logged:?}");
         stop.send(true).unwrap();
         return;
     }
