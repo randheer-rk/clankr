@@ -6,7 +6,7 @@ Status: accepted (2026-11-02)
 
 `kind: ImagePolicy` (namespaced; every policy in a namespace applies) has these fields:
 - `allowedRepositories`: image repository prefixes. Empty means any.
-- `requireSignature` and `keys`: cosign-format signature from a trusted ECDSA P-256 public key (kennel ADR 0005).
+- `requireSignature` and `keys`: cosign-format signature from a trusted ECDSA P-256 public key (kennel ADR 0005): the classic `.sig` tag, or cosign v3's default sigstore bundle attached as an OCI referrer.
 - `allowProcessRuntime`: the unsandboxed S0 runtime is refused wherever any policy exists, unless every policy allows it.
 
 ## Enforcement (two layers)
