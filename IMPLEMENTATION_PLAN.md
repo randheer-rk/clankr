@@ -162,7 +162,7 @@ Deferred: multi-stage builds (M2), multi-arch via binfmt/qemu (M4), and a remote
 - [x] Audit: every mutation and every auth denial, in the same txn, hash-chained, DB trigger blocks UPDATE/DELETE, `verify_audit_chain`, `GET /v1/audit`
 - [x] `clank apply/get/delete` (+ `-w` watch)
 - [x] ADRs 0001–0006
-- [ ] libcontainer rootless spike: written; **skips itself** until `deploy/apparmor/clankr-dev` is installed (ADR 0006)
+- [x] libcontainer rootless spike: moved to kennel with sandboxing (ADR 0007); runs under `kennel/deploy/apparmor/kennel-dev` (ADR 0006), and kennel's container tests run, not skip
 
 **M1, in progress**
 - [x] Graph admission: refs, unreachable nodes, join in-degree, durations, unbounded cycles (Kahn over the unbounded subgraph)
