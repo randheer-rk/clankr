@@ -11,6 +11,7 @@ pub mod federation;
 pub mod protocol;
 pub mod quota;
 pub mod rbac;
+pub mod schedule;
 
 pub const API_VERSION: &str = "clankr.io/v1alpha1";
 

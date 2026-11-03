@@ -13,7 +13,7 @@ async fn store() -> (DevPostgres, Store) {
 }
 
 fn opts<'a>(dedup: Option<&'a str>, max: i32) -> SendOpts<'a> {
-    SendOpts { sender: "agent/planner", correlation_id: Some("req-1"), dedup_key: dedup, ttl_secs: 3600, max_deliveries: max }
+    SendOpts { sender: "agent/planner", correlation_id: Some("req-1"), dedup_key: dedup, ttl_secs: 3600, max_deliveries: max, reply_to: None }
 }
 
 #[tokio::test]

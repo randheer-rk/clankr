@@ -35,6 +35,7 @@ pub mod audit_export;
 pub mod authz;
 pub mod backup;
 mod contexts;
+pub mod cron;
 mod exec;
 mod federation;
 pub mod identity;
@@ -382,6 +383,16 @@ fn check_target(r: &Resource, ns: &str, kind: &str, name: Option<&str>) -> Resul
     admit_kind(r)
 }
 
+/// Kinds the type system names (from the PRD) that nothing acts on yet. They're refused rather
+/// than stored, so creating one never silently does nothing.
+const NOT_BUILT: &[&str] = &[
+    "AgentRevision", "AgentPool", "AgentJob", "AgentSession", "AgentIdentity", "AgentSupervisor", "AgentGroup", "AgentCapability", "AgentNetwork",
+    "AgentLease", "AgentCheckpoint", "ApprovalTask", "TaskQueue", "StorageClass", "PersistentVolume", "VolumeBinding", "VolumeSnapshot", "ContextStore",
+    "ArtifactStore", "StorageQuota", "ComputeClaim", "BrowserClaim", "NetworkClaim", "DatabaseClaim", "QueueClaim", "SecretClaim", "AgentSecret",
+    "AgentConfig", "AgentPolicy", "PriorityClass", "AgentBuild", "BuilderPool", "ImageRegistry", "BuildPolicy", "SkillBundle", "AgentRuntimeClass",
+    "SecurityPolicy", "ToolPolicy",
+];
+
 /// Kind-specific spec validation at admission (CL-19-06).
 fn admit_kind(r: &Resource) -> Result<(), ApiError> {
     match r.kind.as_str() {
@@ -394,6 +405,12 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "AgentMailbox" => clankr_types::agent::admit_mailbox(&r.spec).map(drop),
         "AgentService" => clankr_types::agent::admit_agent_service(&r.spec).map(drop),
         "EventSubscription" => clankr_types::agent::admit_event_subscription(&r.spec).map(drop),
+        "AgentCronJob" => clankr_types::schedule::admit_cron_job(&r.spec).map(drop),
+        "EventTrigger" => clankr_types::schedule::admit_event_trigger(&r.spec).map(drop),
+        k if NOT_BUILT.contains(&k) => Err(ApiError::new(
+            ErrorCode::UnsupportedCapability,
+            format!("{k} is part of the resource model but has no controller yet, so a {k} would do nothing; see `What isn't built yet` in the README"),
+        )),
         "AgentImage" => clankr_types::agent::admit_agent_image(&r.spec).map(drop),
         "ImagePolicy" => clankr_types::agent::admit_image_policy(&r.spec).map(drop),
         "NetworkPolicy" => clankr_types::agent::admit_network_policy(&r.spec).map(drop),
