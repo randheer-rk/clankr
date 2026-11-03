@@ -71,11 +71,11 @@ async fn heartbeat(State(s): State<AppState>, Extension(ctx): Extension<RequestC
     // optional readiness report: {"instances": [{id, epoch, ready}]} (older nodes send nothing)
     if !body.is_empty() {
         let v: Value = serde_json::from_slice(&body).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, format!("heartbeat body: {e}")))?;
-        let reports: Vec<(String, i64, bool)> = v["instances"]
+        let reports: Vec<(String, i64, bool, Option<String>)> = v["instances"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|i| Some((i["id"].as_str()?.to_owned(), i["epoch"].as_i64()?, i["ready"].as_bool().unwrap_or(false))))
+            .filter_map(|i| Some((i["id"].as_str()?.to_owned(), i["epoch"].as_i64()?, i["ready"].as_bool().unwrap_or(false), i["failure"].as_str().map(|f| f.chars().take(2000).collect()))))
             .collect();
         s.store.report_readiness(&name, &reports).await?;
     }

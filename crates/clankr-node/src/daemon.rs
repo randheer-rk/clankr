@@ -62,10 +62,12 @@ pub async fn read_frame(r: &mut OwnedReadHalf) -> Result<AgentFrame> {
     serde_json::from_slice(&buf).context("malformed frame")
 }
 
-/// Runs one agent instance until `shutdown` flips, restarting the agent process when it dies.
-// ponytail: unbounded restarts with capped backoff; AgentSupervisor restart budgets (CL-20-04) come later
+/// Runs one agent instance until `shutdown` flips, restarting the agent process when it dies,
+/// with capped backoff, until the Agent's restart budget is spent: then it returns the
+/// crash-loop error, which the fleet reports.
 pub async fn run_instance(client: Client, cfg: Config, mut shutdown: watch::Receiver<bool>) -> Result<()> {
     let mut backoff = Duration::from_secs(1);
+    let mut failures: std::collections::VecDeque<std::time::Instant> = Default::default();
     while !*shutdown.borrow() {
         let spec = match &cfg.spec {
             Some(s) => admit_agent(s)?,
@@ -77,7 +79,19 @@ pub async fn run_instance(client: Client, cfg: Config, mut shutdown: watch::Rece
         }
         match outcome {
             Ok(()) => return Ok(()),
+            // asked to stop: whatever the agent did on the way out isn't a crash
+            Err(_) if *shutdown.borrow() => return Ok(()),
             Err(e) => {
+                let policy = spec.restart_policy;
+                let now = std::time::Instant::now();
+                failures.push_back(now);
+                while failures.front().is_some_and(|t| now.duration_since(*t) > Duration::from_secs(policy.window_seconds)) {
+                    failures.pop_front();
+                }
+                if failures.len() > policy.max_restarts as usize {
+                    tracing::error!(instance = %cfg.instance, error = %format!("{e:#}"), "agent is crash-looping; not restarting it");
+                    bail!("CrashLoop: {} failures in {}s (restartPolicy allows {}); last: {e:#}", failures.len(), policy.window_seconds, policy.max_restarts);
+                }
                 tracing::warn!(instance = %cfg.instance, error = %format!("{e:#}"), retry_in = ?backoff, "agent instance stopped");
                 tokio::select! {
                     _ = tokio::time::sleep(backoff) => {}

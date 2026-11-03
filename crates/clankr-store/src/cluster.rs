@@ -53,6 +53,9 @@ pub struct Instance {
     pub checkpoint: Option<sqlx::types::Json<Value>>,
     #[sqlx(default)]
     pub checkpoint_version: Option<i64>,
+    /// Reported by the node when the instance used up its restart budget on this epoch.
+    #[sqlx(default)]
+    pub failure: Option<String>,
 }
 
 impl Instance {
@@ -171,18 +174,21 @@ impl Store {
 
     /// Records a node's view of its instances. A report counts only for the epoch it names
     /// and only for instances still placed on that node; `ready_since` keeps the first moment.
-    pub async fn report_readiness(&self, node: &str, reports: &[(String, i64, bool)]) -> Result<(), ApiError> {
-        for (id, epoch, ready) in reports {
+    pub async fn report_readiness(&self, node: &str, reports: &[(String, i64, bool, Option<String>)]) -> Result<(), ApiError> {
+        for (id, epoch, ready, failure) in reports {
             sqlx::query(
                 "update instances set
                      ready_since = case when $4 then (case when ready_epoch = $3 then coalesce(ready_since, now()) else now() end) end,
-                     ready_epoch = case when $4 then $3 end
+                     ready_epoch = case when $4 then $3 end,
+                     failure = coalesce($5, case when failure_epoch = $3 then failure end),
+                     failure_epoch = case when $5 is not null then $3 else failure_epoch end
                  where id = $1 and node = $2 and epoch = $3",
             )
             .bind(id)
             .bind(node)
             .bind(epoch)
             .bind(ready)
+            .bind(failure)
             .execute(self.pool())
             .await
             .map_err(db)?;
@@ -203,12 +209,12 @@ impl Store {
     }
 
     pub async fn instances(&self) -> Result<Vec<Instance>, ApiError> {
-        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, slot, hibernate, hibernate_since, hibernated_at, checkpoint_version from instances order by id").fetch_all(self.pool()).await.map_err(db)
+        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, slot, hibernate, hibernate_since, hibernated_at, checkpoint_version, case when failure_epoch = epoch then failure end as failure from instances order by id").fetch_all(self.pool()).await.map_err(db)
     }
 
     /// Where an instance is placed right now: (node, epoch), or None if unknown/unplaced.
     pub async fn instance_placement(&self, id: &str) -> Result<Option<Instance>, ApiError> {
-        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since from instances where id = $1")
+        sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, case when failure_epoch = epoch then failure end as failure from instances where id = $1")
             .bind(id)
             .fetch_optional(self.pool())
             .await

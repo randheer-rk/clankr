@@ -44,6 +44,35 @@ pub struct AgentSpec {
     /// microvm, and a NetworkPolicy in the namespace that allows it.
     #[serde(default, skip_serializing_if = "NetworkMode::is_proxy")]
     pub network: NetworkMode,
+    /// How often a crashing instance is restarted before its node gives up (CL-20-04).
+    #[serde(default)]
+    pub restart_policy: RestartPolicy,
+}
+
+/// More than `max_restarts` failures within `window_seconds` and the node stops restarting the
+/// instance and reports it as crash-looping. It starts again when it's reassigned: a new Agent
+/// revision, a move to another node, or a deployment restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RestartPolicy {
+    #[serde(default = "default_max_restarts")]
+    pub max_restarts: u32,
+    #[serde(default = "default_restart_window")]
+    pub window_seconds: u64,
+}
+
+impl Default for RestartPolicy {
+    fn default() -> Self {
+        Self { max_restarts: default_max_restarts(), window_seconds: default_restart_window() }
+    }
+}
+
+fn default_max_restarts() -> u32 {
+    5
+}
+
+fn default_restart_window() -> u64 {
+    600
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

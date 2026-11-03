@@ -38,7 +38,7 @@ async fn canary_rolls_back_bad_releases_and_promotes_good_ones() {
     let pass = || async { clankrd::scheduler::reconcile(&s, &lead).await.unwrap() };
     // every instance reports ready at its current epoch
     let ready = || async {
-        let reports: Vec<_> = s.instances().await.unwrap().into_iter().map(|i| (i.id, i.epoch, true)).collect();
+        let reports: Vec<_> = s.instances().await.unwrap().into_iter().map(|i| (i.id, i.epoch, true, None)).collect();
         s.report_readiness("n1", &reports).await.unwrap();
     };
     let gens = || async {

@@ -43,6 +43,8 @@ struct Running {
     stop: watch::Sender<bool>,
     hibernate: watch::Sender<bool>,
     task: JoinHandle<Result<()>>,
+    /// Why the instance gave up (its restart budget ran out), reported until it's reassigned.
+    failure: Option<String>,
 }
 
 pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) -> Result<()> {
@@ -77,7 +79,7 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
         // which instances are up, for rolling restarts; only counts for the epoch reported
         let report: Vec<serde_json::Value> = running
             .iter()
-            .map(|(id, r)| serde_json::json!({"id": id, "epoch": r.epoch, "ready": !r.task.is_finished() && r.ready.load(std::sync::atomic::Ordering::Relaxed)}))
+            .map(|(id, r)| serde_json::json!({"id": id, "epoch": r.epoch, "ready": !r.task.is_finished() && r.ready.load(std::sync::atomic::Ordering::Relaxed), "failure": r.failure}))
             .collect();
         let (want, execs): (Vec<Assignment>, Vec<crate::exec::ExecRequest>) = match Client::node_heartbeat(&servers, &tls, &cfg.name, &serde_json::json!({"instances": report})).await {
             Ok(a) => {
@@ -117,6 +119,17 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
             }
         }
         for a in want {
+            // a crash-looped instance stays down on this epoch (reassignment gives it a new one)
+            if let Some(r) = running.get_mut(&a.id).filter(|r| r.task.is_finished()) {
+                if r.failure.is_none()
+                    && let Some(Ok(Err(e))) = futures_util::FutureExt::now_or_never(&mut r.task)
+                {
+                    r.failure = Some(format!("{e:#}"));
+                }
+                if r.failure.is_some() {
+                    continue;
+                }
+            }
             if let Some(r) = running.get(&a.id).filter(|r| !r.task.is_finished()) {
                 *r.identity.write().expect("lock") = a.identity.clone();
                 if a.hibernate {
@@ -145,7 +158,7 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
                 checkpoint: a.checkpoint_version.map(|v| (v, a.checkpoint.clone().unwrap_or_default())),
             };
             tracing::info!(instance = %a.id, agent = %a.agent, epoch = a.epoch, "starting instance");
-            running.insert(a.id.clone(), Running { epoch: a.epoch, ready, identity, stop, hibernate, task: tokio::spawn(run_instance(client, icfg, rx)) });
+            running.insert(a.id.clone(), Running { epoch: a.epoch, ready, identity, stop, hibernate, task: tokio::spawn(run_instance(client, icfg, rx)), failure: None });
         }
     }
     stop_all(&mut running).await;

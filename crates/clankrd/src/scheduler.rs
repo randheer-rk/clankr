@@ -170,7 +170,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         .fetch_all(&mut *tx)
         .await
         .map_err(clankr_store::db)?;
-    let instances: Vec<Instance> = sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, slot, hibernate, hibernate_since, hibernated_at from instances order by id for update")
+    let instances: Vec<Instance> = sqlx::query_as("select id, namespace, deployment, agent, node, epoch, memory_mib, cpus, note, agent_generation, ready_epoch, ready_since, slot, hibernate, hibernate_since, hibernated_at, case when failure_epoch = epoch then failure end as failure from instances order by id for update")
         .fetch_all(&mut *tx)
         .await
         .map_err(clankr_store::db)?;
@@ -235,7 +235,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         list.sort_by_key(|i| (keep(i, &bindings), i.id.clone()));
         if spec.hibernate {
             let h = hibernate(&mut tx, ns, &key.1, &list, &node_state, &mut cands, &mut report).await?;
-            statuses.push((res.clone(), h.0, 0, String::new(), Rollup { generation: *latest, available: 0, rollout: None, autoscale: None, canary: None, hibernation: Some(h.1) }));
+            statuses.push((res.clone(), h.0, 0, String::new(), Rollup { generation: *latest, available: 0, rollout: None, autoscale: None, canary: None, hibernation: Some(h.1), crash_looping: vec![] }));
             continue;
         }
         while list.len() > spec.replicas as usize {
@@ -387,7 +387,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
         let rollout = (updated < list.len() || waiting_rollout > 0).then(|| {
             format!("{updated}/{} on generation {generation}, {available} ready; {waiting_rollout} waiting (maxUnavailable {})", list.len(), spec.rollout.max_unavailable)
         });
-        statuses.push((res.clone(), placed, pending, reason, Rollup { generation: *generation, available, rollout, autoscale: scaled.get(key).copied(), canary: plan.note, hibernation: None }));
+        statuses.push((res.clone(), placed, pending, reason, Rollup { generation: *generation, available, rollout, autoscale: scaled.get(key).copied(), canary: plan.note, hibernation: None, crash_looping: list.iter().filter_map(|i| Some((i.id.clone(), i.failure.clone()?))).collect() }));
     }
     tx.commit().await.map_err(clankr_store::db)?;
 
@@ -503,6 +503,8 @@ struct Rollup {
     autoscale: Option<(u32, i64)>,
     canary: Option<Value>,
     hibernation: Option<Value>,
+    /// Instances whose node gave up on them (restart budget spent), with the reason.
+    crash_looping: Vec<(String, String)>,
 }
 
 async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usize, pending: usize, reason: &str, rollup: Option<Rollup>) {
@@ -526,6 +528,10 @@ async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usiz
         if let Some(msg) = r.rollout {
             status["phase"] = "RollingOut".into();
             status["rollout"] = msg.into();
+        }
+        if !r.crash_looping.is_empty() {
+            status["phase"] = "CrashLoop".into();
+            status["crashLooping"] = r.crash_looping.iter().map(|(id, why)| serde_json::json!({"instance": id, "reason": why})).collect();
         }
     }
     if res.status.as_ref() == Some(&status) {
