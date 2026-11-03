@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clankr: agents in sandboxes, every step on the record</title>
+  <meta name="description" content="Clankr is an open-source orchestration engine for AI agents, written in Rust. Sandboxed agents, durable workflows, and a gateway between your agents and everything they touch.">
+  <link rel="icon" href="mark.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="field" aria-hidden="true"></canvas>
+
+  <header class="top">
+    <a class="brand" href="#" aria-label="Clankr home">
+      <svg viewBox="0 0 96 96" width="34" height="34" aria-hidden="true"><rect x="2" y="2" width="92" height="92" rx="22" fill="none" stroke="currentColor" stroke-width="5"/><rect x="21" y="21" width="54" height="54" rx="13" fill="none" stroke="currentColor" stroke-width="4" stroke-dasharray="8 6"/><circle cx="48" cy="48" r="11" fill="var(--ember)"/></svg>
+      <span>clankr</span>
+    </a>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#start">Quick start</a>
+      <a href="#docs">Docs</a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- hero -->
+    <section class="hero">
+      <p class="kicker">open source · written in Rust · Apache-2.0</p>
+      <h1>Agents are untrusted code<br>with a credit card.<em>Give them a sandbox and a ledger.</em></h1>
+      <p class="lede">Clankr runs your AI agents in sandboxes, records every step they take, and stands between them and every model, tool and message they touch.</p>
+      <div class="ctas">
+        <a class="btn" href="#start">Run it locally <span aria-hidden="true">→</span></a>
+        <a class="link" href="#how">See how it works</a>
+      </div>
+      <p class="scroll" aria-hidden="true">scroll<span></span></p>
+    </section>
+
+    <!-- 1 contain -->
+    <section class="step" id="how">
+      <p class="label">step one · contain</p>
+      <p class="count"><span class="num" data-count="0">0</span><span class="unit">routes out, by default</span></p>
+      <h2>Every agent gets a box.</h2>
+      <p class="sub">A rootless container, a gVisor sandbox, or a Firecracker microVM. Read-only, unprivileged, and with no network until you grant a host by name.</p>
+      <div class="classes">
+        <figure class="cls c1"><div class="box"><i class="agent"></i></div><figcaption><b>container</b><span>namespaces, seccomp, read-only root</span></figcaption></figure>
+        <figure class="cls c2"><div class="box"><i class="agent"></i></div><figcaption><b>gVisor</b><span>a user-space kernel in between</span></figcaption></figure>
+        <figure class="cls c3"><div class="box"><i class="agent"></i></div><figcaption><b>microVM</b><span>its own kernel, in Firecracker</span></figcaption></figure>
+      </div>
+      <p class="aside">Choose per agent, by how much you trust its code: <code>class: container | gvisor | microvm</code></p>
+    </section>
+
+    <!-- 2 record -->
+    <section class="step">
+      <p class="label">step two · record</p>
+      <p class="count"><span class="num" data-count="1">1</span><span class="unit">transaction per step</span></p>
+      <h2>Crash anywhere.<br>Resume exactly there.</h2>
+      <p class="sub">Each step's result, the event that records it, and the next task commit together in Postgres. A node can die mid-run, and the run picks up from the last event, without calling a model twice.</p>
+      <ol class="log" aria-label="A run's event history">
+        <li><b>1</b><span>RunStarted</span><em>draft · topic: durable agents</em></li>
+        <li><b>2</b><span>TaskScheduled</span><em>write → agent/writer</em></li>
+        <li><b>3</b><span>TaskCompleted</span><em>write · 412 tokens</em></li>
+        <li><b>4</b><span>TaskScheduled</span><em>review → agent/reviewer</em></li>
+        <li class="bad"><b>·</b><span>node-a lost</span><em>its lease on review runs out; epoch fenced off</em></li>
+        <li class="good"><b>·</b><span>redelivered</span><em>review → node-b, write isn't repeated</em></li>
+        <li><b>5</b><span>TaskCompleted</span><em>review · approved</em></li>
+        <li><b>6</b><span>RunCompleted</span><em>replaying it calls no model</em></li>
+      </ol>
+    </section>
+
+    <!-- 3 broker -->
+    <section class="step">
+      <p class="label">step three · broker</p>
+      <p class="count"><span class="num" data-count="0">0</span><span class="unit">API keys inside your agents</span></p>
+      <h2>They ask by name.<br>The gateway holds the keys.</h2>
+      <p class="sub">An agent asks for <code>"default"</code>, a model claim. The gateway checks it's allowed, reserves tokens from the budget, calls the provider with the real key, and records who spent what.</p>
+      <div class="broker">
+        <div class="card code"><p class="cap">agent</p><pre>await ctx.models.generate(
+  "default", messages)</pre></div>
+        <div class="wire" aria-hidden="true"><i></i></div>
+        <div class="card">
+          <p class="cap">gateway</p>
+          <dl>
+            <dt>claim</dt><dd>default → mock-1 <span class="ok">allowed</span></dd>
+            <dt>key</dt><dd>sk-•••••••• <span class="muted">never leaves</span></dd>
+            <dt>budget</dt><dd><span class="meter"><span style="width:38%"></span></span> 3,812 / 10,000</dd>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 approve -->
+    <section class="step">
+      <p class="label">step four · ask a person</p>
+      <h2>Some calls wait<br>for a yes.</h2>
+      <p class="sub">Publishing, paying, deleting. Mark a step or a tool as approval-required, and it waits in an inbox until someone in the right group decides. Who said yes is on the record.</p>
+      <div class="inbox">
+        <div class="card ask">
+          <div class="who"><i>b</i><div><b>blog / publish-post</b><span>run 7ef6 · waiting 4m · group: editors</span></div></div>
+          <p>Publish “Durable agents, explained” to the company blog.</p>
+        </div>
+        <div class="keys" aria-label="Decisions">
+          <span class="chip k-yes">approve</span><span class="chip k-no">reject</span><span class="chip">times out in 2d</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5 talk -->
+    <section class="step">
+      <p class="label">step five · talk</p>
+      <h2>Agents call each other<br>by name, not by address.</h2>
+      <p class="sub">A service is a stable name that every instance of an agent serves. Requests time out cleanly, late replies never come back to haunt anyone, and topics fan out into durable mailboxes, so a subscriber that was down catches up.</p>
+      <div class="card wire-log" aria-label="A request and its reply">
+        <p><span class="t">agent/writer</span> → <code>clankr://agents/blog/reviewer</code></p>
+        <p class="indent">served by <span class="t">reviewer-2f1a</span> on node-b</p>
+        <p class="indent good">reply <code>{ "ok": true }</code> <span class="muted">· 41 ms</span></p>
+        <p><span class="t">agent/shop</span> ⇢ <code>orders.created</code> <span class="muted">→ 2 subscriptions, 1 trigger</span></p>
+      </div>
+    </section>
+
+    <!-- 6 prove -->
+    <section class="step">
+      <p class="label">step six · prove it</p>
+      <h2>An audit log even your DBA<br>can't quietly edit.</h2>
+      <p class="sub">Every privileged action and every denial goes into a hash-chained log, shipped off-site as it's written. Rewrite a row in the database and the copy says so.</p>
+      <div class="chain" aria-hidden="true">
+        <span>#41<i>3f9a…</i></span><span>#42<i>c21e…</i></span><span>#43<i>08bd…</i></span><span class="cut">#44<i>a7f0…</i></span><span>#45<i>51c3…</i></span>
+      </div>
+      <pre class="term"><span class="p">$</span> clankrd audit-check /var/log/clankr/audit.jsonl
+45 rows in the export
+<span class="bad">FAIL</span>  1 exported rows differ in the database: [44]</pre>
+    </section>
+
+    <!-- close -->
+    <section class="close" id="start">
+      <p class="count"><span class="num">3</span><span class="unit">commands to a running cluster</span></p>
+      <h2>Agents in sandboxes.<br>Every step on the record.</h2>
+      <p class="sub">One control-plane binary on Postgres, and a small daemon on each machine that runs agents. No Kubernetes, no Temporal.</p>
+      <div class="term-wrap">
+        <button class="copy" type="button" data-copy="start-cmds">copy</button>
+        <pre class="term" id="start-cmds"><span class="p">$</span> cargo build
+<span class="p">$</span> ./target/debug/clankrd --dev
+<span class="p">$</span> ./target/debug/clankr-node --server https://127.0.0.1:7600 \
+    --join-token "$(cat ~/.config/clankr/join-token)" \
+    --ca-cert ~/.local/share/clankr/pki/ca.crt --runtimes process</pre>
+      </div>
+      <p class="aside">Then <code>clank apply -f hello.yaml</code> and watch it in the console at <code>https://127.0.0.1:7600</code>. Add <a href="../README.md#runtime-classes">kennel</a> for sandboxed runtimes; the README has the full walkthrough.</p>
+      <div class="ctas">
+        <a class="btn" href="../README.md#quick-start">Read the quick start <span aria-hidden="true">→</span></a>
+        <a class="link" href="../docs/adr">Design notes</a>
+      </div>
+    </section>
+  </main>
+
+  <footer id="docs">
+    <p class="line">Clankr · agents in sandboxes, every step on the record · Apache-2.0</p>
+    <nav>
+      <a href="../README.md">README</a>
+      <a href="../README.md#quick-start">Quick start</a>
+      <a href="../docs/adr">Design notes</a>
+      <a href="../docs/runbooks/backup-restore.md">Runbook</a>
+      <a href="../README.md#security">Security model</a>
+      <a href="../README.md#not-built-yet">Not built yet</a>
+    </nav>
+    <p class="fine">Sandboxing by <b>kennel</b>, Clankr's sister project: rootless containers, gVisor and Firecracker microVMs.</p>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>
