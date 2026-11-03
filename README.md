@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/clankr-dark.svg">
-    <img alt="clankr: agents in sandboxes, every step on the record" src="docs/assets/clankr-light.svg" width="460">
+    <img alt="clankr" src="docs/assets/clankr-light.svg" width="300">
   </picture>
 </p>
 
