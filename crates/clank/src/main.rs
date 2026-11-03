@@ -1162,28 +1162,51 @@ fn exec(api: &Api, ns: &str, target: &str, tty: bool, command: Vec<String>) -> R
     let r: Value = ok(api.req(M::POST, &format!("/v1/namespaces/{ns}/instances/{id}/exec")).json(&serde_json::json!({"command": command, "tty": tty, "rows": rows, "cols": cols})).send()?)?.json()?;
     let session = r["session"].as_str().context("no session")?.to_owned();
     let _raw = tty.then(RawTerminal::enter);
-    // stdin up, as frames; a terminal's end of input is ^D (data), a pipe's EOF is a frame
+    // stdin (and, on a terminal, resizes) up as frames; a terminal's end of input is ^D (data),
+    // a pipe's EOF is a frame of its own
+    let (ftx, frx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let frame = |kind: u8, data: &[u8]| [&[kind][..], &(data.len() as u32).to_be_bytes(), data].concat();
+    if tty {
+        // blocked before the other threads start, so only this one takes SIGWINCH
+        let mut set = nix::sys::signal::SigSet::empty();
+        set.add(nix::sys::signal::Signal::SIGWINCH);
+        let _ = set.thread_block();
+        let ftx = ftx.clone();
+        std::thread::spawn(move || {
+            while set.wait().is_ok() {
+                let (r, c) = term_size();
+                if ftx.send(frame(4, &[r.to_be_bytes(), c.to_be_bytes()].concat())).is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match std::io::stdin().read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if ftx.send(frame(1, &buf[..n])).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+        if !tty {
+            let _ = ftx.send(frame(3, &[]));
+        }
+    });
     struct Framed {
-        tty: bool,
+        frames: std::sync::mpsc::Receiver<Vec<u8>>,
         pending: Vec<u8>,
-        done: bool,
     }
     impl Read for Framed {
         fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
             if self.pending.is_empty() {
-                if self.done {
-                    return Ok(0);
-                }
-                let mut buf = [0u8; 8192];
-                let n = std::io::stdin().read(&mut buf)?;
-                if n == 0 {
-                    self.done = true;
-                    if self.tty {
-                        return Ok(0);
-                    }
-                    self.pending = vec![3, 0, 0, 0, 0];
-                } else {
-                    self.pending = [&[1u8][..], &(n as u32).to_be_bytes(), &buf[..n]].concat();
+                match self.frames.recv() {
+                    Ok(f) => self.pending = f,
+                    Err(_) => return Ok(0),
                 }
             }
             let n = self.pending.len().min(out.len());
@@ -1192,7 +1215,7 @@ fn exec(api: &Api, ns: &str, target: &str, tty: bool, command: Vec<String>) -> R
             Ok(n)
         }
     }
-    let input = api.req(M::POST, &format!("/v1/namespaces/{ns}/exec/{session}/input")).body(reqwest::blocking::Body::new(Framed { tty, pending: vec![], done: false }));
+    let input = api.req(M::POST, &format!("/v1/namespaces/{ns}/exec/{session}/input")).body(reqwest::blocking::Body::new(Framed { frames: frx, pending: vec![] }));
     std::thread::spawn(move || {
         let _ = input.send();
     });

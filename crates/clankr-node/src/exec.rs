@@ -2,7 +2,7 @@
 //! instances in heartbeats; for each, the node streams input down and output up over its mTLS
 //! client and runs `kennel exec <instance>` on a pty (or pipes). The bytes are kennel's exec
 //! frames, `[kind, len u32 BE, bytes]`: up, `1` output and `2` the exit status; down, `1`
-//! stdin and `3` end of stdin.
+//! stdin, `3` end of stdin and `4` a terminal resize (rows, cols u16 BE).
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -57,6 +57,8 @@ pub async fn serve(base: String, tls: NodeTls, node: String, kennel: PathBuf, ke
         cmd.arg("-t");
     }
     cmd.arg("--").args(&x.request.command);
+    // the pty master, for resizes (the kernel then signals kennel exec, which passes them on)
+    let mut resize: Option<std::fs::File> = None;
     let (mut child, mut stdin, mut output): (std::process::Child, Option<Box<dyn Write + Send>>, Box<dyn Read + Send>) = if x.request.tty {
         let ws = nix::pty::Winsize { ws_row: x.request.rows.unwrap_or(24), ws_col: x.request.cols.unwrap_or(80), ws_xpixel: 0, ws_ypixel: 0 };
         let p = nix::pty::openpty(Some(&ws), None)?;
@@ -76,6 +78,7 @@ pub async fn serve(base: String, tls: NodeTls, node: String, kennel: PathBuf, ke
         drop(cmd);
         drop(p.slave);
         let master = std::fs::File::from(p.master);
+        resize = Some(master.try_clone()?);
         (child, Some(Box::new(master.try_clone()?)), Box::new(master))
     } else {
         let (r, w) = std::io::pipe()?;
@@ -129,10 +132,16 @@ pub async fn serve(base: String, tls: NodeTls, node: String, kennel: PathBuf, ke
                 }
                 let (kind, data) = (buf[0], buf[5..5 + len].to_vec());
                 buf.drain(..5 + len);
-                let _ = in_tx.send(match kind {
-                    1 => Some(data),
-                    _ => None,
-                });
+                match (kind, &resize) {
+                    (1, _) => drop(in_tx.send(Some(data))),
+                    (3, _) => drop(in_tx.send(None)),
+                    (4, Some(m)) if data.len() == 4 => {
+                        use std::os::fd::AsRawFd;
+                        let ws = nix::libc::winsize { ws_row: u16::from_be_bytes([data[0], data[1]]), ws_col: u16::from_be_bytes([data[2], data[3]]), ws_xpixel: 0, ws_ypixel: 0 };
+                        unsafe { nix::libc::ioctl(m.as_raw_fd(), nix::libc::TIOCSWINSZ, &ws) };
+                    }
+                    _ => {}
+                }
             }
         }
     });

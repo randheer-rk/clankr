@@ -461,6 +461,7 @@ dependencies = [
  "clankr-types",
  "clankrd",
  "clap",
+ "futures-util",
  "hex",
  "nix",
  "reqwest",

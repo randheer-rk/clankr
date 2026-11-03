@@ -11,7 +11,7 @@ Status: accepted (2026-11-03)
   - Every exec is audited before it starts: actor, instance, and the command line.
 - **Rendezvous:** the node's next heartbeat lists the session. The node then opens `GET …/nodes/{name}/exec/{session}/input` and `POST …/output`, and the user's `clank` opens the mirror pair. Only the creating actor and the instance's node can join a session. A session that no node claims within 30s is dropped, and so is any left over after a day.
 - **Bytes:** kennel's exec frames, `[kind u8, len u32 BE, data]`, which clankrd relays without parsing.
-  - Down: `1` stdin, `3` end of stdin. The end of stdin is framed because Firecracker vsock has no half-close.
+  - Down: `1` stdin, `3` end of stdin, `4` a terminal resize (rows, cols u16 BE). The end of stdin is framed because Firecracker vsock has no half-close.
   - Up: `1` output, `2` exit status.
 - **On the node:** `kennel exec <instance> [-t] -- cmd`, on a pty for `-t` or on pipes otherwise. It runs as the agent's user, in its namespaces, through kennel-init's exec service in all three runtime classes.
 - **CLI:** `clank exec [-n ns] TARGET [-t] [-- cmd]`. TARGET is an instance id, or a deployment or agent name (its first ready instance). The command defaults to `sh`, and `-t` defaults to on when stdin and stdout are terminals (raw mode). The exit status is passed through.
@@ -20,5 +20,5 @@ Status: accepted (2026-11-03)
 - Sessions live in Postgres (`exec_sessions`), and bytes cross replicas by LISTEN/NOTIFY, so the four legs may land on any replicas. Each receiving leg subscribes before its sender is let in (the user's output before the session is offered, the node's input before it's claimed), so nothing is sent unheard.
 - Each live session holds two extra Postgres connections (its listeners), and every chunk of at most 4 KiB is a NOTIFY. That's fine for interactive shells; bulk copies would want a direct stream.
 - A listener whose connection drops ends the session; it doesn't reconnect and silently lose bytes.
-- Window resizes after the start aren't propagated.
+- Resizes travel as frames: clank sends one on SIGWINCH, the node sets its pty's size (the kernel then signals `kennel exec`), and kennel-init sets the sandbox's.
 - Output is relayed but not recorded; the audit row records who ran what.

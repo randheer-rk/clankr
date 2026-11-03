@@ -10,6 +10,7 @@ use std::time::Duration;
 use clankr_node::fleet::{FleetConfig, run_fleet};
 use clankr_store::Store;
 use clankr_store::embedded::DevPostgres;
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 
 const OWNER: &str = "owner-token";
@@ -141,6 +142,37 @@ async fn exec_into_an_agent_container() {
     assert_eq!(ok.status.code(), Some(7), "exit status passes through: {stdout} {}", String::from_utf8_lossy(&ok.stderr));
     assert!(stdout.contains("got hello as 65534") && stdout.contains("agent.ts"), "{stdout}");
     assert!(!viewer.status.success() && String::from_utf8_lossy(&viewer.stderr).contains("lacks InstancesExec"), "viewer refused: {}", String::from_utf8_lossy(&viewer.stderr));
+
+    // a terminal session resized after it starts: the new size reaches the sandbox's pty
+    let dev = token("dev").await;
+    let inst = {
+        let v: Value = http.get(format!("{addr}/v1/namespaces/{NS}/instances")).bearer_auth(&dev).send().await.unwrap().json().await.unwrap();
+        v["items"][0]["id"].as_str().unwrap().to_owned()
+    };
+    let r: Value = http.post(format!("{addr}/v1/namespaces/{NS}/instances/{inst}/exec")).bearer_auth(&dev).json(&json!({"command": ["sh", "-c", "sleep 1; stty size"], "tty": true, "rows": 24, "cols": 80})).send().await.unwrap().json().await.unwrap();
+    let session = r["session"].as_str().unwrap().to_owned();
+    let input = {
+        let (http, url, dev) = (http.clone(), format!("{addr}/v1/namespaces/{NS}/exec/{session}/input"), dev.clone());
+        // the resize, then hold the input open while the command runs
+        let frames = futures_util::stream::iter([Ok::<_, std::io::Error>(vec![4u8, 0, 0, 0, 4, 0, 40, 0, 100])]).chain(futures_util::stream::once(async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(vec![])
+        }));
+        tokio::spawn(async move { http.post(url).bearer_auth(dev).body(reqwest::Body::wrap_stream(frames)).send().await })
+    };
+    let out = http.get(format!("{addr}/v1/namespaces/{NS}/exec/{session}/output")).bearer_auth(&dev).send().await.unwrap().bytes().await.unwrap();
+    input.abort();
+    let (mut text, mut code, mut rest) = (String::new(), None, &out[..]);
+    while rest.len() >= 5 {
+        let n = u32::from_be_bytes([rest[1], rest[2], rest[3], rest[4]]) as usize;
+        match rest[0] {
+            1 => text.push_str(&String::from_utf8_lossy(&rest[5..5 + n])),
+            2 => code = Some(i32::from_be_bytes(rest[5..9].try_into().unwrap())),
+            _ => {}
+        }
+        rest = &rest[5 + n..];
+    }
+    assert_eq!((text.trim(), code), ("40 100", Some(0)), "resize reached the sandbox's terminal");
 
     let audit: Value = http.get(format!("{addr}/v1/audit")).bearer_auth(OWNER).send().await.unwrap().json().await.unwrap();
     let row = audit.as_array().unwrap().iter().find(|e| e["action"].as_str().is_some_and(|a| a.starts_with("exec "))).expect("exec audited");
