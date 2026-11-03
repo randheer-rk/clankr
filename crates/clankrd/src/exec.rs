@@ -1,7 +1,9 @@
 //! `clank exec` (ADR 0030): an audited shell into a running agent instance. Nodes connect to
-//! the control plane, never the other way round, so clankrd is a rendezvous: it holds each
-//! session until the instance's node picks it up (from its heartbeat), then relays bytes. Both
-//! sides speak kennel's exec frames, `[kind, len u32 BE, bytes]`, which clankrd passes through.
+//! the control plane, never the other way round, so clankrd is a rendezvous: a session waits in
+//! Postgres until the instance's node picks it up (from its heartbeat), then bytes are relayed.
+//! The user's and the node's connections may reach different replicas; each receiving leg
+//! LISTENs on the session's channel and each sending leg NOTIFYs it. Both sides speak kennel's
+//! exec frames, `[kind, len u32 BE, bytes]`, which clankrd passes through.
 //!
 //!   POST /v1/namespaces/{ns}/instances/{id}/exec  {command, tty, rows, cols} -> {session}
 //!   GET  /v1/namespaces/{ns}/exec/{session}/output   frames from the process (ends at exit)
@@ -9,64 +11,128 @@
 //!   GET  /v1/nodes/{name}/exec/{session}/input       (node) the user's input
 //!   POST /v1/nodes/{name}/exec/{session}/output      (node) the process's output
 //!   GET  /v1/namespaces/{ns}/instances               instances, to find one to exec into
+//!
+//! Order, so nothing is sent before its listener exists: the user's output listener subscribes,
+//! then the session is offered to the node; the node's input listener subscribes, then the
+//! session is claimed and the user's input may flow.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use clankr_types::{ApiError, ErrorCode, RequestCtx};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use sqlx::postgres::PgListener;
 use uuid::Uuid;
 
 use crate::{ApiResult, AppState};
 
 /// Sessions the node hasn't picked up by then are dropped.
 const CLAIM_TIMEOUT: Duration = Duration::from_secs(30);
+/// Raw bytes per NOTIFY (base64 must stay under Postgres's 8000-byte payload limit).
+const CHUNK: usize = 4096;
 
-pub struct Session {
-    pub namespace: String,
-    pub instance: String,
-    pub node: String,
+struct Session {
+    namespace: String,
+    node: String,
     actor: String,
-    pub request: Value,
-    created: Instant,
-    claimed: Mutex<bool>,
-    to_node: (mpsc::Sender<Bytes>, Mutex<Option<mpsc::Receiver<Bytes>>>),
-    to_user: (mpsc::Sender<Bytes>, Mutex<Option<mpsc::Receiver<Bytes>>>),
+    claimed: bool,
+    age: Duration,
 }
 
-/// Live exec sessions. ponytail: in this replica's memory, so the user and the node must reach
-/// the same clankrd (one replica, or sticky routing); a shared relay can come with HA exec.
-#[derive(Default, Clone)]
-pub struct Sessions(Arc<Mutex<HashMap<Uuid, Arc<Session>>>>);
+fn db(e: sqlx::Error) -> ApiError {
+    clankr_store::db(e)
+}
 
-impl Sessions {
-    fn get(&self, id: Uuid) -> Option<Arc<Session>> {
-        let mut m = self.0.lock().unwrap();
-        m.retain(|_, s| *s.claimed.lock().unwrap() || s.created.elapsed() < CLAIM_TIMEOUT);
-        m.get(&id).cloned()
+fn channel(id: Uuid, dir: &str) -> String {
+    format!("exec_{}_{dir}", id.simple())
+}
+
+async fn load(s: &AppState, id: Uuid) -> Result<Option<Session>, ApiError> {
+    let r: Option<(String, String, String, bool, f64)> =
+        sqlx::query_as("select namespace, node, actor, claimed, extract(epoch from now() - created_at)::float8 from exec_sessions where id = $1").bind(id).fetch_optional(s.store.pool()).await.map_err(db)?;
+    Ok(r.map(|(namespace, node, actor, claimed, age)| Session { namespace, node, actor, claimed, age: Duration::from_secs_f64(age.max(0.0)) }))
+}
+
+async fn remove(s: &AppState, id: Uuid) {
+    let _ = sqlx::query("delete from exec_sessions where id = $1").bind(id).execute(s.store.pool()).await;
+}
+
+/// Sessions offered to `node`, for its heartbeat (and housekeeping: unclaimed ones past the
+/// timeout, and any left behind by a vanished user, are dropped).
+pub async fn pending_for(s: &AppState, node: &str) -> Result<Vec<Value>, ApiError> {
+    sqlx::query("delete from exec_sessions where (not claimed and created_at < now() - make_interval(secs => $1)) or created_at < now() - interval '1 day'")
+        .bind(CLAIM_TIMEOUT.as_secs_f64())
+        .execute(s.store.pool())
+        .await
+        .map_err(db)?;
+    let rows: Vec<(Uuid, String, String, Value)> = sqlx::query_as("select id, namespace, instance, request from exec_sessions where node = $1 and user_listening and not claimed")
+        .bind(node)
+        .fetch_all(s.store.pool())
+        .await
+        .map_err(db)?;
+    Ok(rows.into_iter().map(|(id, ns, instance, request)| json!({"session": id, "namespace": ns, "instance": instance, "request": request})).collect())
+}
+
+async fn listen(s: &AppState, id: Uuid, dir: &str) -> Result<PgListener, ApiError> {
+    let mut l = PgListener::connect_with(s.store.pool()).await.map_err(db)?;
+    l.listen(&channel(id, dir)).await.map_err(db)?;
+    Ok(l)
+}
+
+/// A body of what arrives on the listener, until the sender's close (an empty payload) or a lost
+/// connection, which ends the session rather than silently dropping bytes. `done` runs at the end.
+fn stream_body(l: PgListener, done: Option<(AppState, Uuid)>) -> Body {
+    let s = futures_util::stream::unfold((l, done), |(mut l, done)| async move {
+        let chunk = match l.try_recv().await {
+            Ok(Some(n)) if !n.payload().is_empty() => B64.decode(n.payload()).ok().map(Bytes::from),
+            _ => None,
+        };
+        match chunk {
+            Some(b) => Some((Ok::<_, std::io::Error>(b), (l, done))),
+            None => {
+                if let Some((s, id)) = done {
+                    remove(&s, id).await;
+                }
+                None
+            }
+        }
+    });
+    Body::from_stream(s)
+}
+
+/// Forwards a streamed request body to the session's `dir` channel, then closes it.
+async fn pump(s: &AppState, body: Body, id: Uuid, dir: &str) -> Result<(), ApiError> {
+    let ch = channel(id, dir);
+    let mut b = body.into_data_stream();
+    while let Some(Ok(chunk)) = b.next().await {
+        for piece in chunk.chunks(CHUNK) {
+            sqlx::query("select pg_notify($1, $2)").bind(&ch).bind(B64.encode(piece)).execute(s.store.pool()).await.map_err(db)?;
+        }
     }
+    sqlx::query("select pg_notify($1, '')").bind(&ch).execute(s.store.pool()).await.map_err(db)?;
+    Ok(())
+}
 
-    /// Unclaimed sessions for instances on `node`, for its heartbeat.
-    pub fn pending_for(&self, node: &str) -> Vec<Value> {
-        let mut m = self.0.lock().unwrap();
-        m.retain(|_, s| *s.claimed.lock().unwrap() || s.created.elapsed() < CLAIM_TIMEOUT);
-        m.iter()
-            .filter(|(_, s)| s.node == node && !*s.claimed.lock().unwrap())
-            .map(|(id, s)| json!({"session": id, "namespace": s.namespace, "instance": s.instance, "request": s.request}))
-            .collect()
-    }
-
-    fn remove(&self, id: Uuid) {
-        self.0.lock().unwrap().remove(&id);
+/// Waits for the node to claim the session (it's dropped if none does in time).
+async fn wait_claimed(s: &AppState, id: Uuid) -> Result<(), ApiError> {
+    loop {
+        let x = load(s, id).await?.ok_or_else(|| ApiError::new(ErrorCode::NotFound, "no such exec session (expired?)"))?;
+        if x.claimed {
+            return Ok(());
+        }
+        if x.age >= CLAIM_TIMEOUT {
+            remove(s, id).await;
+            return Err(ApiError::new(ErrorCode::Conflict, format!("node {} didn't pick up the session within {}s", x.node, CLAIM_TIMEOUT.as_secs())));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -119,12 +185,18 @@ async fn start(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>,
     let mut tx = s.store.pool().begin().await.map_err(clankr_store::db)?;
     let target = clankr_store::AuditTarget { kind: "Instance", namespace: &ns, name: &id, uid: Some(session.to_string()) };
     clankr_store::audit_in_tx(&mut tx, &ctx, &format!("exec {}{}", if b.tty { "-t " } else { "" }, shell_words(&b.command)), Some(target), true, None, None).await?;
-    tx.commit().await.map_err(clankr_store::db)?;
-    let (a, ar) = mpsc::channel(64);
-    let (c, cr) = mpsc::channel(64);
     let request = json!({"command": b.command, "tty": b.tty, "rows": b.rows, "cols": b.cols});
-    let sess = Session { namespace: ns, instance: id, node, actor: ctx.actor.clone(), request, created: Instant::now(), claimed: Mutex::new(false), to_node: (a, Mutex::new(Some(ar))), to_user: (c, Mutex::new(Some(cr))) };
-    s.exec.0.lock().unwrap().insert(session, Arc::new(sess));
+    sqlx::query("insert into exec_sessions (id, namespace, instance, node, actor, request) values ($1, $2, $3, $4, $5, $6)")
+        .bind(session)
+        .bind(&ns)
+        .bind(&id)
+        .bind(&node)
+        .bind(&ctx.actor)
+        .bind(&request)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    tx.commit().await.map_err(clankr_store::db)?;
     Ok((StatusCode::CREATED, Json(json!({"session": session}))))
 }
 
@@ -132,79 +204,55 @@ fn shell_words(cmd: &[String]) -> String {
     cmd.iter().map(|a| if a.chars().all(|c| c.is_ascii_alphanumeric() || "-_./=:".contains(c)) { a.clone() } else { format!("{a:?}") }).collect::<Vec<_>>().join(" ")
 }
 
-fn session_for_user(s: &AppState, ctx: &RequestCtx, ns: &str, id: &str) -> Result<(Uuid, Arc<Session>), ApiError> {
+async fn session_for_user(s: &AppState, ctx: &RequestCtx, ns: &str, id: &str) -> Result<Uuid, ApiError> {
     let id: Uuid = id.parse().map_err(|_| ApiError::new(ErrorCode::NotFound, "no such exec session"))?;
-    let sess = s.exec.get(id).filter(|x| x.namespace == ns).ok_or_else(|| ApiError::new(ErrorCode::NotFound, "no such exec session (expired?)"))?;
+    let sess = load(s, id).await?.filter(|x| x.namespace == ns).ok_or_else(|| ApiError::new(ErrorCode::NotFound, "no such exec session (expired?)"))?;
     if sess.actor != ctx.actor {
         return Err(ApiError::new(ErrorCode::Forbidden, "exec sessions belong to whoever started them"));
     }
-    Ok((id, sess))
+    Ok(id)
 }
 
-fn session_for_node(s: &AppState, ctx: &RequestCtx, name: &str, id: &str) -> Result<(Uuid, Arc<Session>), ApiError> {
+async fn session_for_node(s: &AppState, ctx: &RequestCtx, name: &str, id: &str) -> Result<Uuid, ApiError> {
     if crate::node_of(ctx) != Some(name) {
         return Err(ApiError::new(ErrorCode::Forbidden, "only the instance's node joins an exec session"));
     }
     let id: Uuid = id.parse().map_err(|_| ApiError::new(ErrorCode::NotFound, "no such exec session"))?;
-    let sess = s.exec.get(id).filter(|x| x.node == name).ok_or_else(|| ApiError::new(ErrorCode::NotFound, "no such exec session"))?;
-    Ok((id, sess))
-}
-
-/// A body that streams what arrives on `rx` (and drops the session when it ends).
-fn stream_body(rx: mpsc::Receiver<Bytes>, done: Option<(Sessions, Uuid)>) -> Body {
-    let s = futures_util::stream::unfold((rx, done), |(mut rx, done)| async move {
-        match rx.recv().await {
-            Some(b) => Some((Ok::<_, std::io::Error>(b), (rx, done))),
-            None => {
-                if let Some((sessions, id)) = done {
-                    sessions.remove(id);
-                }
-                None
-            }
-        }
-    });
-    Body::from_stream(s)
-}
-
-/// Forwards a streamed request body into `tx`.
-async fn pump(body: Body, tx: mpsc::Sender<Bytes>) {
-    let mut s = body.into_data_stream();
-    while let Some(Ok(chunk)) = s.next().await {
-        if tx.send(chunk).await.is_err() {
-            break;
-        }
-    }
+    load(s, id).await?.filter(|x| x.node == name).ok_or_else(|| ApiError::new(ErrorCode::NotFound, "no such exec session"))?;
+    Ok(id)
 }
 
 async fn user_output(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path((ns, id)): Path<(String, String)>) -> ApiResult<Body> {
-    let (sid, sess) = session_for_user(&s, &ctx, &ns, &id)?;
-    // don't hold the user on a session no node will join
-    while !*sess.claimed.lock().unwrap() {
-        if sess.created.elapsed() >= CLAIM_TIMEOUT {
-            s.exec.remove(sid);
-            return Err(ApiError::new(ErrorCode::Conflict, format!("node {} didn't pick up the session within {}s", sess.node, CLAIM_TIMEOUT.as_secs())).into());
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+    let id = session_for_user(&s, &ctx, &ns, &id).await?;
+    let l = listen(&s, id, "up").await?;
+    let n = sqlx::query("update exec_sessions set user_listening = true where id = $1 and not user_listening").bind(id).execute(s.store.pool()).await.map_err(db)?.rows_affected();
+    if n == 0 {
+        return Err(ApiError::new(ErrorCode::Conflict, "this session's output is already being read").into());
     }
-    let rx = sess.to_user.1.lock().unwrap().take().ok_or_else(|| ApiError::new(ErrorCode::Conflict, "this session's output is already being read"))?;
-    Ok(stream_body(rx, Some((s.exec.clone(), sid))))
+    // don't hold the user on a session no node will join
+    wait_claimed(&s, id).await?;
+    Ok(stream_body(l, Some((s, id))))
 }
 
 async fn user_input(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path((ns, id)): Path<(String, String)>, body: Body) -> ApiResult<StatusCode> {
-    let (_, sess) = session_for_user(&s, &ctx, &ns, &id)?;
-    pump(body, sess.to_node.0.clone()).await;
+    let id = session_for_user(&s, &ctx, &ns, &id).await?;
+    wait_claimed(&s, id).await?;
+    pump(&s, body, id, "down").await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn node_input(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path((name, id)): Path<(String, String)>) -> ApiResult<Body> {
-    let (_, sess) = session_for_node(&s, &ctx, &name, &id)?;
-    let rx = sess.to_node.1.lock().unwrap().take().ok_or_else(|| ApiError::new(ErrorCode::Conflict, "session already joined"))?;
-    *sess.claimed.lock().unwrap() = true;
-    Ok(stream_body(rx, None))
+    let id = session_for_node(&s, &ctx, &name, &id).await?;
+    let l = listen(&s, id, "down").await?;
+    let n = sqlx::query("update exec_sessions set claimed = true where id = $1 and user_listening and not claimed").bind(id).execute(s.store.pool()).await.map_err(db)?.rows_affected();
+    if n == 0 {
+        return Err(ApiError::new(ErrorCode::Conflict, "session already joined").into());
+    }
+    Ok(stream_body(l, None))
 }
 
 async fn node_output(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path((name, id)): Path<(String, String)>, body: Body) -> ApiResult<StatusCode> {
-    let (_, sess) = session_for_node(&s, &ctx, &name, &id)?;
-    pump(body, sess.to_user.0.clone()).await;
+    let id = session_for_node(&s, &ctx, &name, &id).await?;
+    pump(&s, body, id, "up").await?;
     Ok(StatusCode::NO_CONTENT)
 }

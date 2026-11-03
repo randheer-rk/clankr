@@ -69,8 +69,6 @@ pub struct AppState {
     /// OIDC user login; None = owner token and ServiceAccount tokens only.
     pub oidc: Option<Arc<authz::Oidc>>,
     pub bindings: authz::BindingCache,
-    /// Live `clank exec` sessions.
-    pub exec: exec::Sessions,
 }
 
 impl AppState {
@@ -83,7 +81,6 @@ impl AppState {
             ca: None,
             oidc: None,
             bindings: Default::default(),
-            exec: Default::default(),
             signer: identity::Signer::derive(&master.to_hex()),
             engine: clankr_engine::Engine::new(store.clone()),
             gateway: clankr_gateway::Gateway::new(store.clone(), master.clone()),

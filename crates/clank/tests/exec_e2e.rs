@@ -43,20 +43,27 @@ async fn exec_into_an_agent_container() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let pg = DevPostgres::start(None).await.unwrap();
     let store = Store::connect(&pg.database("clankr").await.unwrap()).await.unwrap();
-    let mut state = clankrd::AppState::with_join_token(store.clone(), OWNER.into(), clankr_store::secrets::MasterKey::generate(), "join".into()).await.unwrap();
+    let master = clankr_store::secrets::MasterKey::generate();
+    // two replicas on one database: the node uses one, the user the other, so every session
+    // crosses between them
     let pki = tempfile::tempdir().unwrap();
-    let ca = clankr_tls::Ca::load_or_create(pki.path()).unwrap();
+    let ca = Arc::new(clankr_tls::Ca::load_or_create(pki.path()).unwrap());
     let (cert, key) = ca.server_cert(&["localhost".into(), "127.0.0.1".into()]).unwrap();
     let tls = ca.server_config(&cert, &key).unwrap();
     let ca_pem = ca.cert_pem.clone();
     let ca_file = pki.path().join("ca.pem");
     std::fs::write(&ca_file, &ca_pem).unwrap();
-    state.ca = Some(Arc::new(ca));
     clankrd::scheduler::spawn(store.clone(), "test-scheduler".into(), Duration::from_millis(300));
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = format!("https://127.0.0.1:{}", l.local_addr().unwrap().port());
-    let app = clankrd::router(state);
-    tokio::spawn(async move { clankrd::tls::serve_tls(l, app, tls).await.unwrap() });
+    let mut replicas = vec![];
+    for _ in 0..2 {
+        let mut state = clankrd::AppState::with_join_token(store.clone(), OWNER.into(), master.clone(), "join".into()).await.unwrap();
+        state.ca = Some(ca.clone());
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        replicas.push(format!("https://127.0.0.1:{}", l.local_addr().unwrap().port()));
+        let (app, tls) = (clankrd::router(state), tls.clone());
+        tokio::spawn(async move { clankrd::tls::serve_tls(l, app, tls).await.unwrap() });
+    }
+    let (addr, node_addr) = (replicas[0].clone(), replicas[1].clone());
 
     let clank = {
         let (addr, ca_file) = (addr.clone(), ca_file.clone());
@@ -85,7 +92,7 @@ async fn exec_into_an_agent_container() {
     let (stop, rx) = tokio::sync::watch::channel(false);
     let node = tokio::spawn(run_fleet(
         FleetConfig {
-            server: addr.clone(),
+            server: node_addr.clone(),
             ca_pem,
             name: "exec-node".into(),
             join_token: "join".into(),

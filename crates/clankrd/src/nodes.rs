@@ -92,7 +92,7 @@ async fn heartbeat(State(s): State<AppState>, Extension(ctx): Extension<RequestC
         })
         .collect();
     // exec sessions waiting for this node (clank exec)
-    Ok(Json(json!({ "assignments": assignments, "exec": s.exec.pending_for(&name) })))
+    Ok(Json(json!({ "assignments": assignments, "exec": crate::exec::pending_for(&s, &name).await? })))
 }
 
 async fn list(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>) -> ApiResult<Json<Value>> {
