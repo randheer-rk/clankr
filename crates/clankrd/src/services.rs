@@ -102,7 +102,7 @@ async fn publish(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx
     }
     let sender = match workload(&s, &ctx, &headers, &ns, None).await? {
         Some(c) => {
-            if !admit_agent(&s.store.get(&ns, "Agent", &c.agent).await?.spec)?.publishes.iter().any(|t| *t == topic) {
+            if !admit_agent(&s.store.get(&ns, "Agent", &c.agent).await?.spec)?.publishes.contains(&topic) {
                 return Err(ApiError::new(ErrorCode::Forbidden, format!("agent {}/{} doesn't list topic {topic} in publishes", c.ns, c.agent)).into());
             }
             format!("agent/{}", c.agent)
