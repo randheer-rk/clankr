@@ -35,7 +35,8 @@ async fn claim(s: &AppState, ns: &str, claim: &str) -> Result<(), ApiError> {
 
 /// Writer recorded for provenance. A node daemon proxying for an agent names it in
 /// `x-clankr-on-behalf-of`.
-// ponytail: header is trusted because only the owner token exists; workload identity (M3) replaces it
+/// Verified workload claims win; the header (single-node daemons without a workload identity)
+/// only labels below the authenticated actor, so it can't attribute a write to anyone else.
 pub(crate) fn writer(ctx: &RequestCtx, headers: &HeaderMap, claims: Option<&crate::identity::Claims>) -> String {
     if let Some(c) = claims {
         return format!("{}/agent/{}/{}", ctx.actor, c.agent, c.instance);

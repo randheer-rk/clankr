@@ -263,17 +263,45 @@ async fn auth(State(s): State<AppState>, mut req: Request, next: Next) -> Respon
             }
         }
         _ => {
-            // ponytail: unauthenticated requests each write an audit row; add per-IP rate limiting before exposing beyond localhost
             let ctx = RequestCtx { actor: "anonymous".into(), request_id: request_id.clone() };
-            let action = format!("{} {}", req.method(), req.uri().path());
-            if let Err(e) = s.store.audit_deny(&ctx, &action, "missing or invalid bearer token").await {
-                return HttpError(e).into_response(); // fail closed if the denial can't be recorded
+            // a flood of bad tokens can't flood the audit log: past the budget, denials are
+            // counted and recorded as one summary row per window
+            let (record, suppressed) = anon_audit_budget(std::time::Instant::now());
+            if suppressed > 0 {
+                let _ = s.store.audit_deny(&ctx, "unauthenticated requests", &format!("{suppressed} more denials (missing or invalid bearer token) not recorded individually")).await;
+            }
+            if record {
+                let action = format!("{} {}", req.method(), req.uri().path());
+                if let Err(e) = s.store.audit_deny(&ctx, &action, "missing or invalid bearer token").await {
+                    return HttpError(e).into_response(); // fail closed if the denial can't be recorded
+                }
             }
             HttpError(ApiError::new(ErrorCode::Unauthenticated, "missing or invalid bearer token")).into_response()
         }
     };
     resp.headers_mut().insert(REQUEST_ID, HeaderValue::from_str(&request_id).expect("validated ascii"));
     resp
+}
+
+/// Unauthenticated denials audited individually per second, per process.
+const ANON_AUDIT_PER_SEC: u32 = 20;
+static ANON_AUDIT: std::sync::Mutex<Option<(std::time::Instant, u32, u64)>> = std::sync::Mutex::new(None);
+
+/// Whether to audit this denial individually, and how many the last window suppressed (to be
+/// recorded now, once).
+fn anon_audit_budget(now: std::time::Instant) -> (bool, u64) {
+    let mut g = ANON_AUDIT.lock().unwrap();
+    let (start, n, dropped) = g.get_or_insert((now, 0, 0));
+    let mut report = 0;
+    if now.duration_since(*start) >= std::time::Duration::from_secs(1) {
+        (*start, *n, report) = (now, 0, std::mem::take(dropped));
+    }
+    *n += 1;
+    if *n > ANON_AUDIT_PER_SEC {
+        *dropped += 1;
+        return (false, report);
+    }
+    (true, report)
 }
 
 pub const NODE_PREFIX: &str = "node:";
@@ -565,6 +593,14 @@ async fn audit(State(s): State<AppState>, Query(q): Query<AuditQuery>) -> ApiRes
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn anonymous_denials_are_budgeted() {
+        let t = std::time::Instant::now();
+        let first: Vec<_> = (0..25).map(|_| super::anon_audit_budget(t)).collect();
+        assert_eq!(first.iter().filter(|r| r.0).count(), 20);
+        assert_eq!(super::anon_audit_budget(t + std::time::Duration::from_secs(2)), (true, 5), "the next window reports what was dropped");
+    }
+
     use axum::http::Method;
 
     #[test]
