@@ -68,6 +68,10 @@ clankrd backup /backups/clankr-$(date -u +%Y%m%dT%H%MZ)    # DATABASE_URL, CLANK
 
 A crash mid-rotation is settled at the next start or rotation: if the secrets decrypt with `master.key.new`, the rotation committed and the swap is finished; otherwise the pending key is discarded. With `CLANKR_MASTER_KEY`, move the key into `<data-dir>/master.key` first (rotation refuses to run, since it can't rewrite your environment).
 
+## Moving secrets onto a KMS
+
+Secrets are envelope-encrypted (ADR 0032). To have Vault's Transit engine wrap their data keys instead of the master key, start every clankrd with `--kms vault+https://vault:8200/transit/clankr` and `$VAULT_TOKEN` set, then run `clankrd --kms … rewrap-secrets` once. Run the same command after rotating the Vault key, so every data key moves to the new key version.
+
 ## Shipping the audit log off-site
 
 Run clankrd with `--audit-export file:///var/log/clankr/audit.jsonl` (on append-only storage) or `--audit-export https://siem.example/ingest`. To check the database against the copy at any time: `clankrd audit-check /var/log/clankr/audit.jsonl`. It exits 1 if exported rows were deleted or changed in the database, or if the copy itself was edited. See ADR 0031.

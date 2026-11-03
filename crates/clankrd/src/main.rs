@@ -48,6 +48,10 @@ struct Args {
     /// kennel image store for sandboxed tools (default: kennel's own).
     #[arg(long, env = "CLANKR_TOOL_KENNEL_ROOT")]
     tool_kennel_root: Option<PathBuf>,
+    /// Wrap secrets' data keys with a KMS instead of the local master key:
+    /// vault+https://vault:8200/<transit mount>/<key> (token from $VAULT_TOKEN).
+    #[arg(long, env = "CLANKR_KMS", global = true)]
+    kms: Option<String>,
     /// Ship the audit chain off-site as it's written: file:///path.jsonl or https://receiver.
     #[arg(long, env = "CLANKR_AUDIT_EXPORT")]
     audit_export: Option<String>,
@@ -80,6 +84,9 @@ enum Cmd {
     /// Compare an off-site audit export (JSONL) with the database: exit 1 if rows were removed or
     /// changed, or the export itself was edited.
     AuditCheck { export: PathBuf },
+    /// Rewrap every secret's data key with the current key-encryption key: moves secrets onto
+    /// --kms (or a rotated Vault key version), and upgrades rows from before envelope encryption.
+    RewrapSecrets,
     /// Re-encrypt every secret under a new master key and swap `<data-dir>/master.key`. Stop
     /// every clankrd first: running ones hold the old key. The old key is kept as
     /// `master.key.<fingerprint>.old` for restoring older backups.
@@ -110,6 +117,10 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    if let Some(url) = &args.kms {
+        let token = std::env::var("VAULT_TOKEN").context("--kms needs $VAULT_TOKEN")?;
+        let _ = KMS.set(clankr_store::secrets::VaultTransit::parse(url, token)?);
+    }
     let pg_bin = args.pg_bin.clone().or_else(|| _dev_pg.as_ref().map(DevPostgres::bin_dir));
     if let Some(cmd) = args.cmd {
         return run_maintenance(cmd, &url, &data_dir, pg_bin.as_deref()).await;
@@ -188,6 +199,14 @@ async fn run_maintenance(cmd: Cmd, url: &str, data_dir: &std::path::Path, pg_bin
         }
     };
     match cmd {
+        Cmd::RewrapSecrets => {
+            let store = Store::connect(url).await.context("connect metadata store")?;
+            let key = existing_master_key(data_dir, None)?;
+            let ctx = clankr_types::RequestCtx { actor: "clankrd rewrap-secrets".into(), request_id: "maintenance".into() };
+            let n = store.secrets_rekey(&ctx, &key, &key).await.map_err(|e| anyhow::anyhow!("{}", e.message))?;
+            println!("rewrapped {n} secrets with {}", if KMS.get().is_some() { "the KMS" } else { "the local master key" });
+            Ok(())
+        }
         Cmd::AuditCheck { export } => {
             let store = Store::connect(url).await.context("connect metadata store")?;
             let c = clankrd::audit_export::audit_check(&store, &std::fs::read_to_string(&export).with_context(|| format!("read {}", export.display()))?).await?;
@@ -214,6 +233,7 @@ async fn run_maintenance(cmd: Cmd, url: &str, data_dir: &std::path::Path, pg_bin
                 Some(f) => MasterKey::from_hex(&std::fs::read_to_string(&f).with_context(|| format!("read {}", f.display()))?)?,
                 None => MasterKey::generate(),
             };
+            let new = with_kms(new);
             anyhow::ensure!(backup::key_fingerprint(&new) != backup::key_fingerprint(&old), "the new key is the current key");
             // the new key is on disk before any row uses it; finish_rotation settles a crash
             let pending = data_dir.join("master.key.new");
@@ -283,7 +303,7 @@ async fn finish_rotation(store: &Store, data_dir: &std::path::Path) -> anyhow::R
     if std::env::var_os("CLANKR_MASTER_KEY").is_some() || !pending.exists() {
         return Ok(());
     }
-    let new = MasterKey::from_hex(&std::fs::read_to_string(&pending)?)?;
+    let new = with_kms(MasterKey::from_hex(&std::fs::read_to_string(&pending)?)?);
     let (n, bad) = store.secrets_check(&new).await.map_err(|e| anyhow::anyhow!("{}", e.message))?;
     if n > 0 && bad.is_empty() {
         let old = existing_master_key(data_dir, None)?;
@@ -296,31 +316,41 @@ async fn finish_rotation(store: &Store, data_dir: &std::path::Path) -> anyhow::R
     Ok(())
 }
 
+/// The KMS from --kms, set once at startup.
+static KMS: std::sync::OnceLock<clankr_store::secrets::VaultTransit> = std::sync::OnceLock::new();
+
+fn with_kms(k: MasterKey) -> MasterKey {
+    match KMS.get() {
+        Some(kms) => k.with_kms(kms.clone()),
+        None => k,
+    }
+}
+
 /// The master key from CLANKR_MASTER_KEY, an explicit file, or `<data-dir>/master.key`. Never creates one.
 fn existing_master_key(data_dir: &std::path::Path, file: Option<&std::path::Path>) -> anyhow::Result<MasterKey> {
     if let Ok(k) = std::env::var("CLANKR_MASTER_KEY") {
-        return MasterKey::from_hex(&k);
+        return MasterKey::from_hex(&k).map(with_kms);
     }
     let path = file.map_or_else(|| data_dir.join("master.key"), std::path::Path::to_path_buf);
-    MasterKey::from_hex(&std::fs::read_to_string(&path).with_context(|| format!("read master key {}", path.display()))?)
+    MasterKey::from_hex(&std::fs::read_to_string(&path).with_context(|| format!("read master key {}", path.display()))?).map(with_kms)
 }
 
 /// Secret-encryption key (SEC-09): CLANKR_MASTER_KEY (hex) or `<data-dir>/master.key` (0600).
 /// Losing it makes every stored secret unreadable, so it's never regenerated if the file exists.
 fn load_or_create_master_key(data_dir: &std::path::Path) -> anyhow::Result<MasterKey> {
     if let Ok(k) = std::env::var("CLANKR_MASTER_KEY") {
-        return MasterKey::from_hex(&k);
+        return MasterKey::from_hex(&k).map(with_kms);
     }
     let path = data_dir.join("master.key");
     if path.exists() {
         anyhow::ensure!(std::fs::metadata(&path)?.permissions().mode() & 0o077 == 0, "{} must be chmod 600", path.display());
-        return MasterKey::from_hex(&std::fs::read_to_string(&path)?);
+        return MasterKey::from_hex(&std::fs::read_to_string(&path)?).map(with_kms);
     }
     let key = MasterKey::generate();
     use std::io::Write;
     std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?.write_all(key.to_hex().as_bytes())?;
     tracing::warn!(path = %path.display(), "generated secret master key; back it up, secrets are unreadable without it");
-    Ok(key)
+    Ok(with_kms(key))
 }
 
 fn xdg(var: &str, fallback: &str) -> PathBuf {

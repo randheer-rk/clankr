@@ -164,7 +164,7 @@ async fn secrets_need_the_right_master_key() {
     let (_pg, s, _gw) = setup().await;
     let wrong = MasterKey::generate();
     let e = s.secret_read(&ctx(), &wrong, NS, "llm", "apiKey", "test").await.unwrap_err();
-    assert!(e.message.contains("failed to decrypt"));
+    assert!(e.message.contains("not the current master key"), "{}", e.message);
     let meta = s.secret_meta(NS, "llm").await.unwrap();
     assert_eq!(meta.keys, ["apiKey"]);
     let raw: Vec<u8> = sqlx::query_scalar("select ciphertext from secrets").fetch_one(s.pool()).await.unwrap();
