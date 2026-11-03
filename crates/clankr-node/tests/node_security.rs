@@ -39,7 +39,7 @@ async fn nodes_authenticate_with_certs_and_act_only_under_live_workload_tokens()
     let lead = cp.store.acquire_leadership("scheduler", "t", 30.0).await.unwrap().unwrap();
     clankrd::scheduler::reconcile(&cp.store, &lead).await.unwrap();
 
-    let assignments = Client::node_heartbeat(&cp.base.as_str().into(), &n1, "n1", &json!({})).await.unwrap();
+    let (assignments, _) = Client::node_heartbeat(&cp.base.as_str().into(), &n1, "n1", &json!({})).await.unwrap();
     assert_eq!(assignments.len(), 1);
     let token = assignments[0].identity.clone();
     let url = |p: &str| format!("{}{p}", cp.base);
@@ -93,7 +93,7 @@ async fn nodes_authenticate_with_certs_and_act_only_under_live_workload_tokens()
     let (id1b, _) = Client::join(&cp.base.as_str().into(), &ca, "n1", "join-secret", &cap, &json!({})).await.unwrap();
     assert_eq!(http.post(url("/v1/nodes/n1/heartbeat")).send().await.unwrap().status(), StatusCode::UNAUTHORIZED, "old cert revoked");
     let fresh = NodeTls { ca, identity: Some(id1b) };
-    assert_eq!(Client::node_heartbeat(&cp.base.as_str().into(), &fresh, "n1", &json!({})).await.unwrap().len(), 1);
+    assert_eq!(Client::node_heartbeat(&cp.base.as_str().into(), &fresh, "n1", &json!({})).await.unwrap().0.len(), 1);
 
     let denials = cp.store.audit_since(0, 1000).await.unwrap().into_iter().filter(|e| e.decision == "deny").count();
     assert!(denials >= 3, "denials are audited");

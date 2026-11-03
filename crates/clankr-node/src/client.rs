@@ -349,7 +349,8 @@ impl Client {
 
     /// Heartbeat over mTLS; returns this node's current assignments with fresh identity tokens.
     /// `report` is `{"instances": [{id, epoch, ready}]}`.
-    pub async fn node_heartbeat(servers: &Endpoints, tls: &NodeTls, name: &str, report: &Value) -> Result<Vec<Assignment>, ApiError> {
+    /// Assignments, plus `clank exec` sessions waiting for this node.
+    pub async fn node_heartbeat(servers: &Endpoints, tls: &NodeTls, name: &str, report: &Value) -> Result<(Vec<Assignment>, Vec<crate::exec::ExecRequest>), ApiError> {
         let http = tls.client(Duration::from_secs(10));
         let v = servers
             .first_reachable(|base| {
@@ -357,7 +358,9 @@ impl Client {
                 async move { answer(rb.send().await.map_err(unreachable)?, "heartbeat").await }
             })
             .await?;
-        serde_json::from_value(v["assignments"].clone()).map_err(|e| ApiError::new(ErrorCode::StorageUnavailable, e.to_string()))
+        let bad = |e: serde_json::Error| ApiError::new(ErrorCode::StorageUnavailable, e.to_string());
+        let exec = if v["exec"].is_array() { serde_json::from_value(v["exec"].clone()).map_err(bad)? } else { vec![] };
+        Ok((serde_json::from_value(v["assignments"].clone()).map_err(bad)?, exec))
     }
 }
 

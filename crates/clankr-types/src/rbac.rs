@@ -65,6 +65,8 @@ pub enum Perm {
     RbacWrite,
     /// Moving an image digest between AgentImage stages (deploys it wherever that stage is tracked).
     ImagesPromote,
+    /// A shell into a running agent instance (`clank exec`).
+    InstancesExec,
     /// Cluster-only: node maintenance.
     NodesManage,
     /// Cluster-only: the audit log.
@@ -163,6 +165,7 @@ pub fn required(method: &str, path: &str) -> Option<(Option<String>, Perm)> {
         ["v1", "namespaces", n, "approvals", ..] => (ns(n), if read { RunsRead } else { ApprovalsDecide }),
         ["v1", "namespaces", n, "tasks" | "models", ..] => (ns(n), WorkExecute),
         ["v1", "namespaces", n, "instances", _, "checkpoint"] => (ns(n), WorkExecute),
+        ["v1", "namespaces", n, "instances", _, "exec"] | ["v1", "namespaces", n, "exec", ..] => (ns(n), InstancesExec),
         ["v1", "namespaces", n, "toolclaims", _, "call"] => (ns(n), WorkExecute),
         ["v1", "namespaces", n, "toolcalls", _, "complete"] => (ns(n), WorkExecute),
         // snapshots and restores are an operator's tool, not an agent's

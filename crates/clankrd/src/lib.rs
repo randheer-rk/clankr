@@ -34,6 +34,7 @@ mod approvals;
 pub mod authz;
 pub mod backup;
 mod contexts;
+mod exec;
 mod federation;
 pub mod identity;
 mod images;
@@ -68,6 +69,8 @@ pub struct AppState {
     /// OIDC user login; None = owner token and ServiceAccount tokens only.
     pub oidc: Option<Arc<authz::Oidc>>,
     pub bindings: authz::BindingCache,
+    /// Live `clank exec` sessions.
+    pub exec: exec::Sessions,
 }
 
 impl AppState {
@@ -80,6 +83,7 @@ impl AppState {
             ca: None,
             oidc: None,
             bindings: Default::default(),
+            exec: Default::default(),
             signer: identity::Signer::derive(&master.to_hex()),
             engine: clankr_engine::Engine::new(store.clone()),
             gateway: clankr_gateway::Gateway::new(store.clone(), master.clone()),
@@ -138,6 +142,7 @@ pub fn router(state: AppState) -> Router {
         .merge(runs::routes())
         .merge(contexts::routes())
         .merge(federation::routes())
+        .merge(exec::routes())
         .merge(models::routes())
         .merge(mailboxes::routes())
         .merge(nodes::routes())
@@ -290,6 +295,8 @@ fn node_route_allowed(node: &str, method: &axum::http::Method, path: &str) -> bo
         // contexts: key reads/writes only; snapshots and restores are operator actions
         ["v1", "namespaces", _, "tasks", ..] | ["v1", "namespaces", _, "models", ..] | ["v1", "namespaces", _, "contexts", _, "keys", ..] => true,
         ["v1", "namespaces", _, "instances", _, "checkpoint"] => method == axum::http::Method::POST,
+        ["v1", "nodes", n, "exec", _, "input"] => *n == node && method == axum::http::Method::GET,
+        ["v1", "nodes", n, "exec", _, "output"] => *n == node && method == axum::http::Method::POST,
         ["v1", "namespaces", _, "toolclaims", _, "call"] => method == axum::http::Method::POST,
         ["v1", "namespaces", _, "toolcalls", _, "complete"] => method == axum::http::Method::POST,
         ["v1", "namespaces", _, "mailboxes", _, "messages" | "receive" | "ack" | "nack"] => method == axum::http::Method::POST,

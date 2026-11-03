@@ -74,6 +74,19 @@ enum Cmd {
         action: String,
         name: String,
     },
+    /// A shell (or command) inside a running agent instance: TARGET is an instance, or a
+    /// deployment/agent (its first ready instance). Needs the exec permission (admin); audited.
+    Exec {
+        target: String,
+        #[arg(short, long, default_value = "default")]
+        namespace: String,
+        /// A terminal (default: when stdin and stdout are terminals).
+        #[arg(short, long)]
+        tty: bool,
+        /// The command (default: sh).
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
     /// Checkpoint an AgentDeployment's instances and release their compute (--resume to wake it).
     Hibernate {
         deployment: String,
@@ -546,6 +559,7 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Usage { namespace, output } => usage(&api, &namespace, output),
         Cmd::Mailbox { namespace, cmd } => mailbox_cmd(&api, &namespace, cmd),
         Cmd::Context { namespace, cmd } => context_cmd(&api, &namespace, cmd),
+        Cmd::Exec { target, namespace, tty, command } => exec(&api, &namespace, &target, tty, command),
         Cmd::Hibernate { deployment, resume, namespace } => {
             let item = format!("/v1/namespaces/{namespace}/agentdeployments/{deployment}");
             let mut d: Value = ok(api.req(reqwest::Method::GET, &item).send()?)?.json()?;
@@ -1127,6 +1141,107 @@ fn secret_cmd(api: &Api, ns: &str, cmd: SecretCmd) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `clank exec`: start a session, stream stdin up as frames, print output frames, exit with the
+/// process's status (see clankrd/src/exec.rs).
+fn exec(api: &Api, ns: &str, target: &str, tty: bool, command: Vec<String>) -> Result<()> {
+    use reqwest::Method as M;
+    use std::io::{IsTerminal, Read, Write};
+    let list: Value = ok(api.req(M::GET, &format!("/v1/namespaces/{ns}/instances")).send()?)?.json()?;
+    let items = list["items"].as_array().cloned().unwrap_or_default();
+    let id = items
+        .iter()
+        .find(|i| i["id"] == target)
+        .or_else(|| items.iter().find(|i| (i["deployment"] == target || i["agent"] == target) && i["ready"] == true))
+        .and_then(|i| i["id"].as_str().map(str::to_owned))
+        .with_context(|| format!("no instance (or ready instance of a deployment/agent) named {target} in {ns}"))?;
+    let tty = tty || (std::io::stdin().is_terminal() && std::io::stdout().is_terminal());
+    let (rows, cols) = if tty { term_size() } else { (24, 80) };
+    let command = if command.is_empty() { vec!["sh".to_owned()] } else { command };
+    let r: Value = ok(api.req(M::POST, &format!("/v1/namespaces/{ns}/instances/{id}/exec")).json(&serde_json::json!({"command": command, "tty": tty, "rows": rows, "cols": cols})).send()?)?.json()?;
+    let session = r["session"].as_str().context("no session")?.to_owned();
+    let _raw = tty.then(RawTerminal::enter);
+    // stdin up, as frames; a terminal's end of input is ^D (data), a pipe's EOF is a frame
+    struct Framed {
+        tty: bool,
+        pending: Vec<u8>,
+        done: bool,
+    }
+    impl Read for Framed {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            if self.pending.is_empty() {
+                if self.done {
+                    return Ok(0);
+                }
+                let mut buf = [0u8; 8192];
+                let n = std::io::stdin().read(&mut buf)?;
+                if n == 0 {
+                    self.done = true;
+                    if self.tty {
+                        return Ok(0);
+                    }
+                    self.pending = vec![3, 0, 0, 0, 0];
+                } else {
+                    self.pending = [&[1u8][..], &(n as u32).to_be_bytes(), &buf[..n]].concat();
+                }
+            }
+            let n = self.pending.len().min(out.len());
+            out[..n].copy_from_slice(&self.pending[..n]);
+            self.pending.drain(..n);
+            Ok(n)
+        }
+    }
+    let input = api.req(M::POST, &format!("/v1/namespaces/{ns}/exec/{session}/input")).body(reqwest::blocking::Body::new(Framed { tty, pending: vec![], done: false }));
+    std::thread::spawn(move || {
+        let _ = input.send();
+    });
+    let mut output = ok(api.req(M::GET, &format!("/v1/namespaces/{ns}/exec/{session}/output")).send()?)?;
+    let mut out = std::io::stdout().lock();
+    loop {
+        let mut head = [0u8; 5];
+        output.read_exact(&mut head).context("the session ended without an exit status")?;
+        let mut body = vec![0u8; u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize];
+        output.read_exact(&mut body)?;
+        match head[0] {
+            1 => {
+                out.write_all(&body)?;
+                out.flush()?;
+            }
+            2 if body.len() == 4 => {
+                drop(_raw);
+                std::process::exit(i32::from_be_bytes([body[0], body[1], body[2], body[3]]));
+            }
+            _ => bail!("unexpected frame from the session"),
+        }
+    }
+}
+
+fn term_size() -> (u16, u16) {
+    let mut ws: nix::libc::winsize = unsafe { std::mem::zeroed() };
+    if unsafe { nix::libc::ioctl(1, nix::libc::TIOCGWINSZ, &mut ws) } == 0 && ws.ws_row > 0 { (ws.ws_row, ws.ws_col) } else { (24, 80) }
+}
+
+/// The local terminal in raw mode for a session; restored on drop.
+struct RawTerminal(Option<nix::sys::termios::Termios>);
+
+impl RawTerminal {
+    fn enter() -> Self {
+        use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
+        let Ok(saved) = tcgetattr(std::io::stdin()) else { return Self(None) };
+        let mut raw = saved.clone();
+        cfmakeraw(&mut raw);
+        let _ = tcsetattr(std::io::stdin(), SetArg::TCSANOW, &raw);
+        Self(Some(saved))
+    }
+}
+
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        if let Some(t) = &self.0 {
+            let _ = nix::sys::termios::tcsetattr(std::io::stdin(), nix::sys::termios::SetArg::TCSANOW, t);
+        }
+    }
 }
 
 fn context_cmd(api: &Api, ns: &str, cmd: ContextCmd) -> Result<()> {

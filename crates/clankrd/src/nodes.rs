@@ -91,7 +91,8 @@ async fn heartbeat(State(s): State<AppState>, Extension(ctx): Extension<RequestC
                 "hibernate": i.hibernate, "checkpoint": i.checkpoint.map(|j| j.0), "checkpointVersion": i.checkpoint_version })
         })
         .collect();
-    Ok(Json(json!({ "assignments": assignments })))
+    // exec sessions waiting for this node (clank exec)
+    Ok(Json(json!({ "assignments": assignments, "exec": s.exec.pending_for(&name) })))
 }
 
 async fn list(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>) -> ApiResult<Json<Value>> {

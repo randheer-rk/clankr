@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+nix = { version = "0.29", features = ["term", "ioctl"] }
 anyhow.workspace = true
 serde_json.workspace = true
 serde.workspace = true
@@ -22,5 +23,8 @@ hex = "0.4"
 axum = "0.8"
 clankr-store = { path = "../clankr-store", features = ["embedded"] }
 clankrd = { path = "../clankrd" }
+clankr-node = { path = "../clankr-node" }
+clankr-tls = { path = "../clankr-tls" }
 tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

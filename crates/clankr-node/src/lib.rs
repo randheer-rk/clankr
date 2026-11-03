@@ -4,4 +4,5 @@
 pub mod client;
 pub mod daemon;
 pub mod egress;
+pub mod exec;
 pub mod fleet;

@@ -54,6 +54,7 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
     let http: crate::client::SharedHttp = Arc::new(RwLock::new(tls.client(Duration::from_secs(330))));
     tracing::info!(node = %cfg.name, "joined cluster (mTLS)");
     let mut running: HashMap<String, Running> = HashMap::new();
+    let mut exec_started: std::collections::HashSet<String> = Default::default();
     let mut last_ok = Instant::now();
     let mut tick = tokio::time::interval(cfg.heartbeat);
     loop {
@@ -78,7 +79,7 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
             .iter()
             .map(|(id, r)| serde_json::json!({"id": id, "epoch": r.epoch, "ready": !r.task.is_finished() && r.ready.load(std::sync::atomic::Ordering::Relaxed)}))
             .collect();
-        let want: Vec<Assignment> = match Client::node_heartbeat(&servers, &tls, &cfg.name, &serde_json::json!({"instances": report})).await {
+        let (want, execs): (Vec<Assignment>, Vec<crate::exec::ExecRequest>) = match Client::node_heartbeat(&servers, &tls, &cfg.name, &serde_json::json!({"instances": report})).await {
             Ok(a) => {
                 last_ok = Instant::now();
                 a
@@ -92,6 +93,19 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
                 continue;
             }
         };
+        // clank exec sessions into our instances, each started once
+        for x in execs {
+            if !running.contains_key(&x.instance) || !exec_started.insert(x.session.clone()) {
+                continue;
+            }
+            let (base, tls, node, kennel, root) = (servers.current(), tls.clone(), cfg.name.clone(), cfg.kennel.clone(), cfg.kennel_root.clone());
+            tokio::spawn(async move {
+                let session = x.session.clone();
+                if let Err(e) = crate::exec::serve(base, tls, node, kennel, root, x).await {
+                    tracing::warn!(%session, error = %format!("{e:#}"), "exec session failed");
+                }
+            });
+        }
         // stop what's no longer ours (or was reassigned and came back with a new epoch)
         let ids: Vec<String> = running.keys().cloned().collect();
         for id in ids {

@@ -12,7 +12,10 @@ serde_json.workspace = true
 clankr-types = { path = "../clankr-types" }
 clankr-tls = { path = "../clankr-tls" }
 clap = { version = "4", features = ["derive", "env"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }
+futures-util = "0.3"
+nix = { version = "0.29", features = ["term", "ioctl", "process"] }
+bytes = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "signal", "time", "sync", "io-util", "fs"] }
 tracing = "0.1"
