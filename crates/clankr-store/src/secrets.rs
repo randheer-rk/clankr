@@ -14,8 +14,10 @@ use sqlx::Row;
 use crate::audit::{AuditTarget, record};
 use crate::{Store, db};
 
-/// 32-byte master key. Hold it outside the database (file with 0600, env, or KMS later).
-// ponytail: single master key, no rotation yet; envelope encryption + KMS (SEC-09) when rotation is needed
+/// 32-byte master key. Hold it outside the database (file with 0600, or env). Rotated offline
+/// with `clankrd rotate-master-key`, which re-encrypts every secret ([`Store::secrets_rekey`]).
+// ponytail: one key encrypts every value; envelope encryption (per-secret data keys) + KMS when a
+// rotation must avoid rewriting every row, or the key must never leave an HSM
 #[derive(Clone)]
 pub struct MasterKey(Key<Aes256Gcm>);
 
@@ -177,5 +179,29 @@ impl Store {
             }
         }
         Ok((rows.len(), bad))
+    }
+
+    /// Re-encrypts every secret from `old` to `new` in one transaction: all or nothing, and
+    /// refused if any row doesn't decrypt with `old`. Returns how many were rewritten.
+    pub async fn secrets_rekey(&self, ctx: &RequestCtx, old: &MasterKey, new: &MasterKey) -> Result<usize, ApiError> {
+        let mut tx = self.pool().begin().await.map_err(db)?;
+        let rows = sqlx::query("select namespace, name, version, nonce, ciphertext from secrets for update").fetch_all(&mut *tx).await.map_err(db)?;
+        let (from, to) = (Aes256Gcm::new(&old.0), Aes256Gcm::new(&new.0));
+        for r in &rows {
+            let (ns, name, version): (String, String, i64) = (r.get("namespace"), r.get("name"), r.get("version"));
+            let (nonce, ct): (Vec<u8>, Vec<u8>) = (r.get("nonce"), r.get("ciphertext"));
+            let aad = aad(&ns, &name, version);
+            let plain = <[u8; 12]>::try_from(nonce.as_slice())
+                .ok()
+                .and_then(|n| from.decrypt(&Nonce::from(n), Payload { msg: &ct, aad: &aad }).ok())
+                .ok_or_else(|| ApiError::new(ErrorCode::StorageUnavailable, format!("secret {ns}/{name} doesn't decrypt with the current key; nothing was changed")))?;
+            let mut fresh = [0u8; 12];
+            getrandom::fill(&mut fresh).expect("os rng");
+            let ct = to.encrypt(&Nonce::from(fresh), Payload { msg: &plain, aad: &aad }).map_err(|_| ApiError::new(ErrorCode::StorageUnavailable, "encryption failed"))?;
+            sqlx::query("update secrets set nonce = $3, ciphertext = $4 where namespace = $1 and name = $2").bind(&ns).bind(&name).bind(&fresh[..]).bind(&ct).execute(&mut *tx).await.map_err(db)?;
+        }
+        record(&mut tx, ctx, &format!("master key rotation ({} secrets)", rows.len()), None, true, None, None).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(rows.len())
     }
 }

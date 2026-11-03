@@ -60,6 +60,14 @@ clankrd backup /backups/clankr-$(date -u +%Y%m%dT%H%MZ)    # DATABASE_URL, CLANK
    - `clank usage` and the web UI look right;
    - `clankrd verify <backup>` can be re-run at any time before you put the database back into service.
 
+## Rotating the master key
+
+1. **Stop every clankrd.** Running ones hold the old key in memory.
+2. **Rotate:** `clankrd --data-dir <dir> rotate-master-key [--new-key-file new.key]`. It re-encrypts every secret in one transaction (all or nothing), then swaps `master.key`. The old key stays as `master.key.<fingerprint>.old`: backups taken before the rotation still need it. Escrow the new key.
+3. **Start clankrd again.** Workload tokens are signed with a key derived from the master key, so nodes get new ones on their next heartbeat (they live 120s anyway).
+
+A crash mid-rotation is settled at the next start or rotation: if the secrets decrypt with `master.key.new`, the rotation committed and the swap is finished; otherwise the pending key is discarded. With `CLANKR_MASTER_KEY`, move the key into `<data-dir>/master.key` first (rotation refuses to run, since it can't rewrite your environment).
+
 ## What happens to work in flight
 
 Everything after the backup point is gone: runs started after it, events after it, approvals decided after it, and resources changed after it. Within what was restored:

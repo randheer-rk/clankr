@@ -74,6 +74,14 @@ enum Cmd {
     },
     /// Check a database against a backup's manifest (audit chain, secrets, run replay, counts).
     Verify { dir: PathBuf },
+    /// Re-encrypt every secret under a new master key and swap `<data-dir>/master.key`. Stop
+    /// every clankrd first: running ones hold the old key. The old key is kept as
+    /// `master.key.<fingerprint>.old` for restoring older backups.
+    RotateMasterKey {
+        /// The new key (64 hex chars); generated when omitted.
+        #[arg(long)]
+        new_key_file: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -102,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let store = Store::connect(&url).await.context("connect metadata store")?;
+    finish_rotation(&store, &data_dir).await?;
     let master = load_or_create_master_key(&data_dir)?;
     let join_token = match std::env::var("CLANKR_JOIN_TOKEN") {
         Ok(t) => t,
@@ -170,6 +179,35 @@ async fn run_maintenance(cmd: Cmd, url: &str, data_dir: &std::path::Path, pg_bin
         }
     };
     match cmd {
+        Cmd::RotateMasterKey { new_key_file } => {
+            anyhow::ensure!(std::env::var_os("CLANKR_MASTER_KEY").is_none(), "the key comes from CLANKR_MASTER_KEY; rotation swaps <data-dir>/master.key, so move the key there first");
+            let store = Store::connect(url).await.context("connect metadata store")?;
+            finish_rotation(&store, data_dir).await?;
+            let old = existing_master_key(data_dir, None)?;
+            let new = match new_key_file {
+                Some(f) => MasterKey::from_hex(&std::fs::read_to_string(&f).with_context(|| format!("read {}", f.display()))?)?,
+                None => MasterKey::generate(),
+            };
+            anyhow::ensure!(backup::key_fingerprint(&new) != backup::key_fingerprint(&old), "the new key is the current key");
+            // the new key is on disk before any row uses it; finish_rotation settles a crash
+            let pending = data_dir.join("master.key.new");
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&pending)?;
+            f.write_all(new.to_hex().as_bytes())?;
+            f.sync_all()?;
+            let ctx = clankr_types::RequestCtx { actor: "clankrd rotate-master-key".into(), request_id: "maintenance".into() };
+            let n = match store.secrets_rekey(&ctx, &old, &new).await {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&pending);
+                    anyhow::bail!("{}", e.message);
+                }
+            };
+            swap_in_new_key(data_dir, &old)?;
+            println!("re-encrypted {n} secrets; master key {} -> {}", &backup::key_fingerprint(&old)[..16], &backup::key_fingerprint(&new)[..16]);
+            println!("old key kept as master.key.{}.old (older backups need it); escrow the new one", &backup::key_fingerprint(&old)[..16]);
+            Ok(())
+        }
         Cmd::Backup { out, include_keys } => {
             let master = existing_master_key(data_dir, None)?;
             let m = backup::backup(backup::BackupOpts { database_url: url, out: &out, master: &master, data_dir, include_keys, pg_bin }).await?;
@@ -202,6 +240,34 @@ async fn run_maintenance(cmd: Cmd, url: &str, data_dir: &std::path::Path, pg_bin
             Ok(())
         }
     }
+}
+
+/// Keeps the old key beside it, then makes `master.key.new` the master key.
+fn swap_in_new_key(data_dir: &std::path::Path, old: &MasterKey) -> anyhow::Result<()> {
+    let key = data_dir.join("master.key");
+    std::fs::rename(&key, data_dir.join(format!("master.key.{}.old", &clankrd::backup::key_fingerprint(old)[..16])))?;
+    std::fs::rename(data_dir.join("master.key.new"), key)?;
+    Ok(())
+}
+
+/// A rotation that died between writing `master.key.new` and swapping it in: if the secrets
+/// decrypt with the new key the rotation committed, so finish the swap; otherwise drop it.
+async fn finish_rotation(store: &Store, data_dir: &std::path::Path) -> anyhow::Result<()> {
+    let pending = data_dir.join("master.key.new");
+    if std::env::var_os("CLANKR_MASTER_KEY").is_some() || !pending.exists() {
+        return Ok(());
+    }
+    let new = MasterKey::from_hex(&std::fs::read_to_string(&pending)?)?;
+    let (n, bad) = store.secrets_check(&new).await.map_err(|e| anyhow::anyhow!("{}", e.message))?;
+    if n > 0 && bad.is_empty() {
+        let old = existing_master_key(data_dir, None)?;
+        swap_in_new_key(data_dir, &old)?;
+        tracing::warn!("finished an interrupted master key rotation");
+    } else {
+        std::fs::remove_file(&pending)?;
+        tracing::warn!("discarded an uncommitted master key rotation");
+    }
+    Ok(())
 }
 
 /// The master key from CLANKR_MASTER_KEY, an explicit file, or `<data-dir>/master.key`. Never creates one.
