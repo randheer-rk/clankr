@@ -318,6 +318,15 @@ impl Client {
         self.call(Method::POST, &format!("/mailboxes/{}/{op}", encode_key(mailbox)), Some(body), Some(who)).await
     }
 
+    /// AgentService operations (`op` = call | reply), brokered for an agent.
+    pub async fn service(&self, service: &str, op: &str, body: &Value, who: &str) -> Result<Value, ApiError> {
+        self.call(Method::POST, &format!("/services/{}/{op}", encode_key(service)), Some(body), Some(who)).await
+    }
+
+    pub async fn publish(&self, topic: &str, body: &Value, who: &str) -> Result<Value, ApiError> {
+        self.call(Method::POST, &format!("/topics/{}/publish", encode_key(topic)), Some(body), Some(who)).await
+    }
+
     /// Joins the cluster: sends a CSR for a key generated here, returns the node's client
     /// identity (certificate + key) and its certificate PEM. The key never leaves this process.
     pub async fn join(servers: &Endpoints, ca: &reqwest::Certificate, name: &str, join_token: &str, capacity: &Value, labels: &Value) -> Result<(reqwest::Identity, String), ApiError> {

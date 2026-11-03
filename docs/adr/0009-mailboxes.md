@@ -16,4 +16,4 @@ Status: accepted (2026-11-01)
 - An agent may only use mailboxes listed in `Agent.spec.mailboxes`. That's checked by the node broker and again by clankrd against the token's agent.
 - Listing and requeue are owner-only.
 
-**Not yet.** Pub/sub topics with durable subscriptions (CL-30-03), ordering partitions, per-sender quotas and backpressure beyond the size cap (CL-30-08), encrypted payload storage, and push delivery into SDK handlers (today agents pull with `receive`).
+**Since then.** Services, request/reply, topics with durable subscriptions and SDK handlers came in ADR 0033. Still not here: ordering partitions, per-sender quotas and backpressure beyond the size cap (CL-30-08), and encrypted payload storage.

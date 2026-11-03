@@ -31,9 +31,29 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/namespaces/{ns}/mailboxes/{mb}/messages/{id}/requeue", post(requeue))
 }
 
-/// The mailbox must exist; a node may only use it for an agent whose spec lists it.
-/// Returns the mailbox spec and the authenticated sender name (CL-30-10).
-async fn authorize(s: &AppState, ctx: &RequestCtx, headers: &HeaderMap, ns: &str, mb: &str) -> Result<(MailboxSpec, String), ApiError> {
+/// Who may use queue `mb`, and the authenticated sender name (CL-30-10). An AgentMailbox: an
+/// agent whose spec lists it. A service queue (`svc:<name>`): agents listing the service in
+/// `calls` send to it, and only its serving agent receives from it. Reply queues (`reply:…`)
+/// are only reachable through a call.
+pub(crate) async fn authorize(s: &AppState, ctx: &RequestCtx, headers: &HeaderMap, ns: &str, mb: &str, sending: bool) -> Result<(MailboxSpec, String), ApiError> {
+    if let Some(svc) = mb.strip_prefix("svc:") {
+        let spec = clankr_types::agent::admit_agent_service(&s.store.get(ns, "AgentService", svc).await?.spec)?;
+        let queue = MailboxSpec { max_deliveries: spec.max_deliveries, retention_seconds: spec.retention_seconds };
+        return match workload(s, ctx, headers, ns, None).await? {
+            Some(c) => {
+                let allowed = if sending { admit_agent(&s.store.get(ns, "Agent", &c.agent).await?.spec)?.calls.iter().any(|x| x == svc) } else { c.agent == spec.agent };
+                if !allowed {
+                    let why = if sending { format!("agent {}/{} doesn't list service {svc} in calls", c.ns, c.agent) } else { format!("service {svc} is served by agent {}, not {}", spec.agent, c.agent) };
+                    return Err(ApiError::new(ErrorCode::Forbidden, why));
+                }
+                Ok((queue, format!("agent/{}", c.agent)))
+            }
+            None => Ok((queue, crate::contexts::writer(ctx, headers, None))),
+        };
+    }
+    if mb.contains(':') {
+        return Err(ApiError::new(ErrorCode::NotFound, format!("no mailbox {mb}")));
+    }
     let spec = admit_mailbox(&s.store.get(ns, "AgentMailbox", mb).await?.spec)?;
     match workload(s, ctx, headers, ns, None).await? {
         Some(c) => {
@@ -67,9 +87,9 @@ async fn send(
     Path((ns, mb)): Path<(String, String)>,
     Json(b): Json<SendBody>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    let (spec, sender) = authorize(&s, &ctx, &headers, &ns, &mb).await?;
+    let (spec, sender) = authorize(&s, &ctx, &headers, &ns, &mb, true).await?;
     let ttl = b.ttl_seconds.unwrap_or(spec.retention_seconds).clamp(1, spec.retention_seconds);
-    let opts = SendOpts { sender: &sender, correlation_id: b.correlation_id.as_deref(), dedup_key: b.dedup_key.as_deref(), ttl_secs: ttl, max_deliveries: spec.max_deliveries };
+    let opts = SendOpts { sender: &sender, correlation_id: b.correlation_id.as_deref(), dedup_key: b.dedup_key.as_deref(), ttl_secs: ttl, max_deliveries: spec.max_deliveries, reply_to: None };
     let (m, duplicate) = s.store.mailbox_send(&ns, &mb, &b.payload, opts).await?;
     let code = if duplicate { StatusCode::OK } else { StatusCode::CREATED };
     Ok((code, Json(json!({ "message": m, "duplicate": duplicate }))))
@@ -104,7 +124,7 @@ async fn receive(
     Path((ns, mb)): Path<(String, String)>,
     Json(b): Json<ReceiveBody>,
 ) -> ApiResult<Json<Vec<Message>>> {
-    authorize(&s, &ctx, &headers, &ns, &mb).await?;
+    authorize(&s, &ctx, &headers, &ns, &mb, false).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(b.wait_seconds.unwrap_or(0).min(30));
     let mut wake = s.mailbox_events.clone();
     loop {
@@ -130,13 +150,13 @@ struct AckBody {
 }
 
 async fn ack(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, headers: HeaderMap, Path((ns, mb)): Path<(String, String)>, Json(b): Json<AckBody>) -> ApiResult<StatusCode> {
-    authorize(&s, &ctx, &headers, &ns, &mb).await?;
+    authorize(&s, &ctx, &headers, &ns, &mb, false).await?;
     s.store.mailbox_ack(&ns, &mb, b.id, b.epoch).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn nack(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, headers: HeaderMap, Path((ns, mb)): Path<(String, String)>, Json(b): Json<AckBody>) -> ApiResult<Json<Message>> {
-    authorize(&s, &ctx, &headers, &ns, &mb).await?;
+    authorize(&s, &ctx, &headers, &ns, &mb, false).await?;
     Ok(Json(s.store.mailbox_nack(&ns, &mb, b.id, b.epoch, b.delay_seconds.clamp(0.0, 86_400.0), &b.reason).await?))
 }
 

@@ -174,6 +174,7 @@ pub fn required(method: &str, path: &str) -> Option<(Option<String>, Perm)> {
         ["v1", "namespaces", n, "mailboxes", _, "messages", _, "requeue"] => (ns(n), ResourcesWrite),
         ["v1", "namespaces", n, "mailboxes", _, "messages"] if read => (ns(n), ResourcesRead),
         ["v1", "namespaces", n, "mailboxes", ..] => (ns(n), WorkExecute),
+        ["v1", "namespaces", n, "services", _, "call" | "reply"] | ["v1", "namespaces", n, "topics", _, "publish"] => (ns(n), WorkExecute),
         ["v1", "namespaces", n, "usage", ..] => (ns(n), ResourcesRead),
         ["v1", "namespaces", n, plural, ..] => {
             let rbac = matches!(*plural, "rolebindings" | "serviceaccounts");

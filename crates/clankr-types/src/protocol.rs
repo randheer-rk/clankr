@@ -12,7 +12,7 @@ use crate::ApiError;
 
 pub const ABI_MAJOR: u16 = 1;
 /// 1.1: hibernation (`Hibernate` / `Checkpoint`, checkpoint in `Welcome`).
-pub const ABI_MINOR: u16 = 1;
+pub const ABI_MINOR: u16 = 2;
 /// Bigger payloads go through the artifact store by reference (CL-25-06).
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 
@@ -71,6 +71,24 @@ pub enum CallOp {
         wait_seconds: Option<u64>,
     },
     MailboxAck { mailbox: String, id: String, epoch: i64 },
+    /// Request/reply to an AgentService (ABI 1.2); answers `{reply, requestId, from}`.
+    ServiceCall {
+        service: String,
+        payload: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_seconds: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dedup_key: Option<String>,
+    },
+    /// The serving agent answers a request it received from `svc:<service>`.
+    ServiceReply { service: String, request_id: String, payload: Value },
+    /// Publish to a topic: a durable copy into each subscribed mailbox.
+    Publish {
+        topic: String,
+        payload: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dedup_key: Option<String>,
+    },
     MailboxNack {
         mailbox: String,
         id: String,

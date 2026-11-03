@@ -48,6 +48,7 @@ mod nodes;
 mod quota;
 mod runs;
 pub mod scheduler;
+mod services;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -143,6 +144,7 @@ pub fn router(state: AppState) -> Router {
         .merge(exec::routes())
         .merge(models::routes())
         .merge(mailboxes::routes())
+        .merge(services::routes())
         .merge(nodes::routes())
         .merge(authz::routes())
         .merge(quota::routes())
@@ -326,6 +328,7 @@ fn node_route_allowed(node: &str, method: &axum::http::Method, path: &str) -> bo
         ["v1", "namespaces", _, "toolclaims", _, "call"] => method == axum::http::Method::POST,
         ["v1", "namespaces", _, "toolcalls", _, "complete"] => method == axum::http::Method::POST,
         ["v1", "namespaces", _, "mailboxes", _, "messages" | "receive" | "ack" | "nack"] => method == axum::http::Method::POST,
+        ["v1", "namespaces", _, "services", _, "call" | "reply"] | ["v1", "namespaces", _, "topics", _, "publish"] => method == axum::http::Method::POST,
         _ => false,
     }
 }
@@ -389,6 +392,8 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "AgentDeployment" => clankr_types::agent::admit_deployment(&r.spec).map(drop),
         "VolumeClaim" => clankr_types::agent::admit_volume_claim(&r.spec).map(drop),
         "AgentMailbox" => clankr_types::agent::admit_mailbox(&r.spec).map(drop),
+        "AgentService" => clankr_types::agent::admit_agent_service(&r.spec).map(drop),
+        "EventSubscription" => clankr_types::agent::admit_event_subscription(&r.spec).map(drop),
         "AgentImage" => clankr_types::agent::admit_agent_image(&r.spec).map(drop),
         "ImagePolicy" => clankr_types::agent::admit_image_policy(&r.spec).map(drop),
         "NetworkPolicy" => clankr_types::agent::admit_network_policy(&r.spec).map(drop),

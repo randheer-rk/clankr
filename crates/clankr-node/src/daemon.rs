@@ -323,6 +323,9 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
     let sandbox = node_sandbox(cfg);
     let mut hibernate = cfg.hibernate.clone();
     let mut hibernating = hibernate.as_ref().is_some_and(|h| *h.borrow());
+    // calls run concurrently (a service call or long-poll mustn't hold up task heartbeats or
+    // the agent's other calls); their replies come back through here
+    let (reply_tx, mut replies) = mpsc::channel::<NodeFrame>(64);
 
     loop {
         if hibernating && busy.is_none() {
@@ -388,16 +391,21 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
                         None => tracing::warn!(delivery_id, "agent answered a delivery it doesn't hold; ignored"),
                     },
                     AgentFrame::Call { call_id, op } => {
-                        let reply = match broker(client, spec, &who, busy.as_ref().map(|b| &b.1), sandbox.as_ref(), op).await {
-                            Ok(v) => NodeFrame::Reply { call_id, ok: Some(v), error: None },
-                            Err(e) => NodeFrame::Reply { call_id, ok: None, error: Some(e) },
-                        };
-                        write_frame(&mut wr, &reply).await?;
+                        // attributed to the task being worked on when the call was made
+                        let (client, spec, who, task, sandbox, tx) = (client.clone(), spec.clone(), who.clone(), busy.as_ref().map(|b| b.1.clone()), sandbox.clone(), reply_tx.clone());
+                        tokio::spawn(async move {
+                            let reply = match broker(&client, &spec, &who, task.as_ref(), sandbox.as_ref(), op).await {
+                                Ok(v) => NodeFrame::Reply { call_id, ok: Some(v), error: None },
+                                Err(e) => NodeFrame::Reply { call_id, ok: None, error: Some(e) },
+                            };
+                            let _ = tx.send(reply).await;
+                        });
                     }
                     AgentFrame::Log { level, message } => tracing::info!(target: "agent", instance = %cfg.instance, level, "{message}"),
                     other => tracing::warn!(?other, "unexpected frame after handshake"),
                 }
             }
+            Some(reply) = replies.recv() => write_frame(&mut wr, &reply).await?,
             _ = heartbeat.tick(), if busy.is_some() => {
                 if let Some((_, l)) = &busy
                     && let Err(e) = client.heartbeat(l, ttl).await
@@ -535,30 +543,48 @@ async fn broker(client: &Client, spec: &AgentSpec, who: &str, task: Option<&Leas
             client.context_put(&claim, &key, &value, if_version, who).await
         }
         CallOp::MailboxSend { mailbox, payload, correlation_id, dedup_key, ttl_seconds } => {
-            if !spec.mailboxes.contains(&mailbox) {
+            let one_way_call = mailbox.strip_prefix("svc:").is_some_and(|svc| spec.calls.iter().any(|c| c == svc));
+            if !one_way_call && !spec.mailboxes.contains(&mailbox) {
                 return Err(deny("AgentMailbox", &mailbox));
             }
             let body = json!({"payload": payload, "correlationId": correlation_id, "dedupKey": dedup_key, "ttlSeconds": ttl_seconds});
             client.mailbox(&mailbox, "messages", &body, who).await
         }
         CallOp::MailboxReceive { mailbox, max, visibility_seconds, wait_seconds } => {
-            if !spec.mailboxes.contains(&mailbox) {
+            // a service's own queue: clankrd checks this agent serves it
+            if !mailbox.starts_with("svc:") && !spec.mailboxes.contains(&mailbox) {
                 return Err(deny("AgentMailbox", &mailbox));
             }
             let body = json!({"owner": who, "max": max, "visibilitySeconds": visibility_seconds, "waitSeconds": wait_seconds});
             client.mailbox(&mailbox, "receive", &body, who).await
         }
         CallOp::MailboxAck { mailbox, id, epoch } => {
-            if !spec.mailboxes.contains(&mailbox) {
+            // a service's own queue: clankrd checks this agent serves it
+            if !mailbox.starts_with("svc:") && !spec.mailboxes.contains(&mailbox) {
                 return Err(deny("AgentMailbox", &mailbox));
             }
             client.mailbox(&mailbox, "ack", &json!({"id": id, "epoch": epoch}), who).await
         }
         CallOp::MailboxNack { mailbox, id, epoch, delay_seconds, reason } => {
-            if !spec.mailboxes.contains(&mailbox) {
+            // a service's own queue: clankrd checks this agent serves it
+            if !mailbox.starts_with("svc:") && !spec.mailboxes.contains(&mailbox) {
                 return Err(deny("AgentMailbox", &mailbox));
             }
             client.mailbox(&mailbox, "nack", &json!({"id": id, "epoch": epoch, "delaySeconds": delay_seconds, "reason": reason}), who).await
+        }
+        CallOp::ServiceCall { service, payload, timeout_seconds, dedup_key } => {
+            if !spec.calls.contains(&service) {
+                return Err(deny("AgentService", &service));
+            }
+            let body = json!({"payload": payload, "timeoutSeconds": timeout_seconds, "dedupKey": dedup_key});
+            client.service(&service, "call", &body, who).await
+        }
+        CallOp::ServiceReply { service, request_id, payload } => client.service(&service, "reply", &json!({"requestId": request_id, "payload": payload}), who).await,
+        CallOp::Publish { topic, payload, dedup_key } => {
+            if !spec.publishes.contains(&topic) {
+                return Err(deny("topic", &topic));
+            }
+            client.publish(&topic, &json!({"payload": payload, "dedupKey": dedup_key}), who).await
         }
         CallOp::ContextList { claim, prefix } => {
             if !spec.contexts.contains(&claim) {

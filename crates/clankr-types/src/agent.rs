@@ -44,6 +44,12 @@ pub struct AgentSpec {
     /// microvm, and a NetworkPolicy in the namespace that allows it.
     #[serde(default, skip_serializing_if = "NetworkMode::is_proxy")]
     pub network: NetworkMode,
+    /// AgentServices this agent may call (request/reply or one-way), by name (CL-30-01).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<String>,
+    /// Topics this agent may publish to (CL-30-03).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publishes: Vec<String>,
     /// How often a crashing instance is restarted before its node gives up (CL-20-04).
     #[serde(default)]
     pub restart_policy: RestartPolicy,
@@ -308,6 +314,53 @@ pub fn admit_mailbox(spec: &serde_json::Value) -> Result<MailboxSpec, ApiError> 
     }
     if !(1..=30 * 86_400).contains(&s.retention_seconds) {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "retentionSeconds must be 1..=2592000").field("spec.retentionSeconds"));
+    }
+    Ok(s)
+}
+
+/// A stable logical address, `clankr://agents/<namespace>/<name>`, served by every instance of
+/// `agent` from one durable queue (CL-30-01). Callers never learn instances or nodes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentServiceSpec {
+    pub agent: String,
+    #[serde(default = "default_max_deliveries")]
+    pub max_deliveries: i32,
+    /// How long a reply is kept for its caller (requests expire at their call's timeout).
+    #[serde(default = "default_retention")]
+    pub retention_seconds: i64,
+}
+
+pub fn admit_agent_service(spec: &serde_json::Value) -> Result<AgentServiceSpec, ApiError> {
+    let s: AgentServiceSpec = serde_json::from_value(spec.clone()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, format!("service spec: {e}")).field("spec"))?;
+    if s.agent.is_empty() {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "agent is required").field("spec.agent"));
+    }
+    admit_mailbox(&serde_json::json!({"maxDeliveries": s.max_deliveries, "retentionSeconds": s.retention_seconds}))?;
+    Ok(s)
+}
+
+/// Delivers every message published to `topic` (in this namespace) into `mailbox`, durably: a
+/// subscriber that was down catches up from its mailbox (CL-30-03).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EventSubscriptionSpec {
+    pub topic: String,
+    pub mailbox: String,
+}
+
+/// Topic names: lowercase letters, digits, `.`, `-` and `_`, up to 128 bytes.
+pub fn valid_topic(t: &str) -> bool {
+    !t.is_empty() && t.len() <= 128 && t.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b".-_".contains(&c))
+}
+
+pub fn admit_event_subscription(spec: &serde_json::Value) -> Result<EventSubscriptionSpec, ApiError> {
+    let s: EventSubscriptionSpec = serde_json::from_value(spec.clone()).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, format!("subscription spec: {e}")).field("spec"))?;
+    if !valid_topic(&s.topic) {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "topic: lowercase letters, digits, '.', '-', '_'").field("spec.topic"));
+    }
+    if s.mailbox.is_empty() {
+        return Err(ApiError::new(ErrorCode::InvalidSpec, "mailbox is required").field("spec.mailbox"));
     }
     Ok(s)
 }

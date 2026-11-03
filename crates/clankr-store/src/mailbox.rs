@@ -27,9 +27,11 @@ pub struct Message {
     pub expires_at: DateTime<Utc>,
     pub dead_reason: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// A request: where its reply goes (see `clankrd` services).
+    pub reply_to: Option<String>,
 }
 
-const COLS: &str = "id, seq, sender, correlation_id, dedup_key, payload, state, lease_epoch, deliveries, expires_at, dead_reason, created_at";
+const COLS: &str = "id, seq, sender, correlation_id, dedup_key, payload, state, lease_epoch, deliveries, expires_at, dead_reason, created_at, reply_to";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +52,7 @@ pub struct SendOpts<'a> {
     pub dedup_key: Option<&'a str>,
     pub ttl_secs: i64,
     pub max_deliveries: i32,
+    pub reply_to: Option<&'a str>,
 }
 
 impl Store {
@@ -60,8 +63,8 @@ impl Store {
             return Err(ApiError::new(ErrorCode::QuotaExceeded, format!("payload is {size} bytes; max {MAX_PAYLOAD_BYTES} (send an artifact reference)")));
         }
         let ins: Option<Message> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "insert into mailbox_messages (id, namespace, mailbox, sender, correlation_id, dedup_key, payload, state, max_deliveries, expires_at)
-             values ($1, $2, $3, $4, $5, $6, $7, 'ready', $8, now() + make_interval(secs => $9))
+            "insert into mailbox_messages (id, namespace, mailbox, sender, correlation_id, dedup_key, payload, state, max_deliveries, expires_at, reply_to)
+             values ($1, $2, $3, $4, $5, $6, $7, 'ready', $8, now() + make_interval(secs => $9), $10)
              on conflict (namespace, mailbox, dedup_key) do nothing returning {COLS}"
         )))
         .bind(Uuid::new_v4())
@@ -73,6 +76,7 @@ impl Store {
         .bind(payload)
         .bind(o.max_deliveries)
         .bind(o.ttl_secs as f64)
+        .bind(o.reply_to)
         .fetch_optional(self.pool())
         .await
         .map_err(db)?;
@@ -154,6 +158,17 @@ impl Store {
         .await
         .map_err(db)?
         .ok_or_else(|| stale(id, epoch))
+    }
+
+    /// One message by id, in any state.
+    pub async fn mailbox_get(&self, ns: &str, mailbox: &str, id: Uuid) -> Result<Option<Message>, ApiError> {
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("select {COLS} from mailbox_messages where namespace = $1 and mailbox = $2 and id = $3")))
+            .bind(ns)
+            .bind(mailbox)
+            .bind(id)
+            .fetch_optional(self.pool())
+            .await
+            .map_err(db)
     }
 
     pub async fn mailbox_list(&self, ns: &str, mailbox: &str, state: Option<&str>, limit: i64) -> Result<Vec<Message>, ApiError> {

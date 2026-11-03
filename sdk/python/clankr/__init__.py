@@ -31,7 +31,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
-ABI_MAJOR, ABI_MINOR = 1, 1
+ABI_MAJOR, ABI_MINOR = 1, 2
 MAX_FRAME = 4 * 1024 * 1024
 __version__ = "0.1.0"
 
@@ -177,6 +177,8 @@ class Message:
         self.correlation_id = raw.get("correlationId")
         self.payload = raw["payload"]
         self.deliveries = raw["deliveries"]
+        #: Set on a service request: the call is waiting for a reply.
+        self.reply_to = raw.get("replyTo")
 
     async def ack(self) -> None:
         await self._calls.call({"op": "mailboxAck", "mailbox": self.mailbox, "id": self.id, "epoch": self.epoch})
@@ -204,6 +206,26 @@ class _Mailbox:
         return [Message(self._calls, self.name, m) for m in raw]
 
 
+class _Services:
+    """AgentServices by name (`clankr://agents/<namespace>/<name>`): the caller never learns
+    which instance or node serves it. The agent must list the service in `spec.calls`."""
+
+    def __init__(self, calls: "_Calls"):
+        self._calls = calls
+
+    async def call(self, service: str, payload: Any, timeout_seconds: int = 30, dedup_key: Optional[str] = None) -> Any:
+        """Request/reply: returns the reply payload. Raises ClankrError("OutcomeUnknown") on
+        timeout: a request nobody took expires unprocessed, one being handled may still finish."""
+        op = {"op": "serviceCall", "service": service, "payload": payload, "timeoutSeconds": timeout_seconds}
+        if dedup_key is not None:
+            op["dedupKey"] = dedup_key
+        return (await self._calls.call(op))["reply"]
+
+    async def send(self, service: str, payload: Any, dedup_key: Optional[str] = None) -> dict:
+        """One-way: queued for the service, no reply."""
+        return await _Mailbox(self._calls, f"svc:{service}").send(payload, dedup_key=dedup_key)
+
+
 class Context:
     def __init__(self, calls: _Calls, welcome: dict):
         self._calls = calls
@@ -212,6 +234,7 @@ class Context:
         self.instance = welcome["instance"]
         self.models = _Models(calls)
         self.tools = _Tools(calls)
+        self.services = _Services(calls)
 
     def context(self, claim: str) -> _ContextClaim:
         return _ContextClaim(self._calls, claim)
@@ -219,16 +242,27 @@ class Context:
     def mailbox(self, name: str) -> _Mailbox:
         return _Mailbox(self._calls, name)
 
+    async def publish(self, topic: str, payload: Any, dedup_key: Optional[str] = None) -> dict:
+        """A durable copy into every mailbox subscribed to `topic`; returns {"delivered": n, ...}.
+        The agent must list the topic in `spec.publishes`."""
+        op = {"op": "publish", "topic": topic, "payload": payload}
+        if dedup_key is not None:
+            op["dedupKey"] = dedup_key
+        return await self._calls.call(op)
+
     async def log(self, message: str, level: str = "info") -> None:
         await self._calls.conn.send({"type": "log", "level": level, "message": message})
 
 
 Handler = Callable[[Task, Context], Awaitable[Any]]
+MessageHandler = Callable[[Message, Context], Awaitable[Any]]
 
 
 class AgentApp:
     def __init__(self) -> None:
         self.handlers: dict = {}
+        #: queue -> handler, for messages pushed into handlers (services and subscriptions)
+        self.consumers: dict = {}
         self._on_hibernate: Optional[Callable[[Context], Awaitable[Any]]] = None
         #: State checkpointed before the last hibernation (None on a fresh start), and its version.
         self.checkpoint: Any = None
@@ -244,6 +278,24 @@ class AgentApp:
     def task(self, node: str = "*") -> Callable[[Handler], Handler]:
         def register(fn: Handler) -> Handler:
             self.handlers[node] = fn
+            return fn
+        return register
+
+    def service(self, name: str) -> Callable[[MessageHandler], MessageHandler]:
+        """Serves AgentService `name` (its spec must name this agent). The handler gets each
+        request as a Message; what it returns is the reply. Raising Permanent replies with
+        {"error": ...}; any other exception gives the request back for redelivery."""
+        def register(fn: MessageHandler) -> MessageHandler:
+            self.consumers[f"svc:{name}"] = fn
+            return fn
+        return register
+
+    def subscribe(self, mailbox: str) -> Callable[[MessageHandler], MessageHandler]:
+        """Handles every message arriving in `mailbox` (an AgentMailbox in this agent's spec,
+        e.g. one an EventSubscription fills): acked when the handler returns, redelivered when it
+        raises."""
+        def register(fn: MessageHandler) -> MessageHandler:
+            self.consumers[mailbox] = fn
             return fn
         return register
 
@@ -265,6 +317,7 @@ class AgentApp:
         self.checkpoint, self.checkpoint_version = welcome.get("checkpoint"), welcome.get("checkpointVersion")
         await conn.send({"type": "ready"})
 
+        consumers = [asyncio.create_task(self._consume(calls, ctx, q, fn)) for q, fn in self.consumers.items()]
         running: set = set()
         while True:
             try:
@@ -279,10 +332,14 @@ class AgentApp:
             elif kind == "reply":
                 calls.resolve(frame)
             elif kind == "shutdown":
+                for c in consumers:
+                    c.cancel()
                 if running:
                     await asyncio.wait(running, timeout=frame.get("graceMs", 5000) / 1000)
                 return
             elif kind == "hibernate":
+                for c in consumers:
+                    c.cancel()
                 # in-flight tasks and the hook may still call the node; keep delivering replies
                 pump = asyncio.create_task(self._pump(conn, calls))
                 if running:
@@ -291,6 +348,40 @@ class AgentApp:
                 pump.cancel()
                 await conn.send({"type": "checkpoint", "state": state})
                 return
+
+    async def _consume(self, calls: "_Calls", ctx: Context, queue: str, fn: MessageHandler) -> None:
+        """Long-polls `queue` and runs `fn` per message, in order. Unacked messages (a crash, a
+        cancelled loop) come back to some instance after their visibility timeout."""
+        box = _Mailbox(calls, queue)
+        service = queue[4:] if queue.startswith("svc:") else None
+        while True:
+            try:
+                # one at a time: a lease never runs out while earlier messages are handled
+                batch = await box.receive(max=1, visibility_seconds=60, wait_seconds=20)
+            except ClankrError as e:
+                await ctx.log(f"receive from {queue}: {e}", "warn")
+                await asyncio.sleep(2)
+                continue
+            for m in batch:
+                try:
+                    result = await fn(m, ctx)
+                    if service and m.reply_to:
+                        await calls.call({"op": "serviceReply", "service": service, "requestId": m.id, "payload": result})
+                    await m.ack()
+                except Permanent as e:
+                    if service and m.reply_to:
+                        await calls.call({"op": "serviceReply", "service": service, "requestId": m.id, "payload": {"error": str(e)}})
+                    await m.ack()
+                except asyncio.CancelledError:
+                    raise
+                except ClankrError as e:
+                    # e.g. StaleLease: the lease ran out and it went to another instance
+                    await ctx.log(f"{queue}: {e}", "warn")
+                except Exception as e:  # noqa: BLE001 - redelivered; dead-lettered at maxDeliveries
+                    try:
+                        await m.nack(delay_seconds=1, reason=f"{type(e).__name__}: {e}")
+                    except ClankrError:
+                        pass
 
     async def _pump(self, conn: _Conn, calls: "_Calls") -> None:
         while True:

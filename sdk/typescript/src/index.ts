@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { connect, type Socket } from "node:net"
 
 export const ABI_MAJOR = 1
-export const ABI_MINOR = 1
+export const ABI_MINOR = 2
 export const MAX_FRAME = 4 * 1024 * 1024
 export const VERSION = "0.1.0"
 
@@ -131,6 +131,8 @@ export class Message {
   readonly payload: any
   readonly deliveries: number
   readonly mailbox: string
+  /** Set on a service request: the call is waiting for a reply. */
+  readonly replyTo?: string
   private calls: Calls
   constructor(calls: Calls, mailbox: string, raw: any) {
     this.calls = calls
@@ -141,6 +143,7 @@ export class Message {
     this.correlationId = raw.correlationId ?? undefined
     this.payload = raw.payload
     this.deliveries = raw.deliveries
+    this.replyTo = raw.replyTo ?? undefined
   }
   async ack(): Promise<void> {
     await this.calls.call({ op: "mailboxAck", mailbox: this.mailbox, id: this.id, epoch: this.epoch })
@@ -172,6 +175,15 @@ export class Context {
   readonly instance: string
   readonly models: { generate(claim: string, messages: { role: string; content: string }[], opts?: { system?: string; maxOutputTokens?: number }): Promise<Generated> }
   readonly tools: { call(claim: string, tool: string, method: string, input?: Json, opts?: { idempotencyKey?: string; approval?: string }): Promise<ToolResult> }
+  /**
+   * AgentServices by name (`clankr://agents/<namespace>/<name>`), listed in the agent's
+   * `spec.calls`. `call` is request/reply and throws ClankrError("OutcomeUnknown") on timeout;
+   * `send` is one-way.
+   */
+  readonly services: {
+    call(service: string, payload: Json, opts?: { timeoutSeconds?: number; dedupKey?: string }): Promise<any>
+    send(service: string, payload: Json, opts?: { dedupKey?: string }): Promise<{ message: any; duplicate: boolean }>
+  }
 
   private calls: Calls
   constructor(calls: Calls, welcome: Frame) {
@@ -193,6 +205,15 @@ export class Context {
         return calls.call({ op: "toolCall", claim, call: { tool, method, input, idempotencyKey: key, approval: opts.approval } })
       },
     }
+    this.services = {
+      call: async (service, payload, opts = {}) => (await calls.call({ op: "serviceCall", service, payload, timeoutSeconds: opts.timeoutSeconds ?? 30, dedupKey: opts.dedupKey })).reply,
+      send: (service, payload, opts = {}) => new Mailbox(calls, `svc:${service}`).send(payload, opts),
+    }
+  }
+
+  /** A durable copy into every mailbox subscribed to `topic` (listed in `spec.publishes`). */
+  publish(topic: string, payload: Json, opts: { dedupKey?: string } = {}): Promise<{ delivered: number; subscriptions: string[] }> {
+    return this.calls.call({ op: "publish", topic, payload, dedupKey: opts.dedupKey })
   }
 
   context(claim: string): ContextClaim {
@@ -207,9 +228,12 @@ export class Context {
 }
 
 export type Handler = (task: Task, ctx: Context) => Promise<Json | void> | Json | void
+export type MessageHandler = (msg: Message, ctx: Context) => Promise<Json | void> | Json | void
 
 export class AgentApp {
   private handlers = new Map<string, Handler>()
+  /** queue -> handler, for messages pushed into handlers (services and subscriptions) */
+  private consumers = new Map<string, MessageHandler>()
   private hibernateHook?: (ctx: Context) => Promise<Json> | Json
   /** State checkpointed before the last hibernation (null on a fresh start), and its version. */
   checkpoint: any = null
@@ -218,6 +242,21 @@ export class AgentApp {
   /** Handles a workflow node; "*" catches every node without its own handler. */
   task(node: string, fn: Handler): this {
     this.handlers.set(node, fn)
+    return this
+  }
+
+  /**
+   * Serves AgentService `name` (its spec names this agent). The handler gets each request; what
+   * it returns is the reply. Throwing Permanent replies `{error}`; anything else redelivers.
+   */
+  service(name: string, fn: MessageHandler): this {
+    this.consumers.set(`svc:${name}`, fn)
+    return this
+  }
+
+  /** Handles every message arriving in `mailbox` (in the agent's spec): acked when the handler returns, redelivered when it throws. */
+  subscribe(mailbox: string, fn: MessageHandler): this {
+    this.consumers.set(mailbox, fn)
     return this
   }
 
@@ -256,6 +295,8 @@ export class AgentApp {
     this.checkpointVersion = welcome.checkpointVersion ?? null
     await conn.send({ type: "ready" })
 
+    const consuming = { on: true }
+    for (const [queue, fn] of this.consumers) void this.consume(calls, ctx, queue, fn, consuming)
     const running = new Set<Promise<void>>()
     const track = (p: Promise<void>) => {
       running.add(p)
@@ -271,6 +312,7 @@ export class AgentApp {
       else if (f.type === "reply") calls.resolve(f)
       else if (f.type === "shutdown" || f.type === "hibernate") stopping = f
     }
+    consuming.on = false
     const pump = (async () => {
       for (let f = await conn.recv(); f; f = await conn.recv()) if (f.type === "reply") calls.resolve(f)
     })()
@@ -283,6 +325,43 @@ export class AgentApp {
     }
     sock.end()
     void pump
+  }
+
+  /** Long-polls `queue`, one message at a time, and runs `fn` on each, in order. */
+  private async consume(calls: Calls, ctx: Context, queue: string, fn: MessageHandler, consuming: { on: boolean }): Promise<void> {
+    const box = new Mailbox(calls, queue)
+    const service = queue.startsWith("svc:") ? queue.slice(4) : null
+    const reply = (m: Message, payload: Json | void) => calls.call({ op: "serviceReply", service, requestId: m.id, payload: payload ?? null })
+    while (consuming.on) {
+      let batch: Message[]
+      try {
+        batch = await box.receive({ max: 1, visibilitySeconds: 60, waitSeconds: 20 })
+      } catch (e) {
+        await ctx.log(`receive from ${queue}: ${e}`, "warn")
+        await new Promise(r => setTimeout(r, 2000))
+        continue
+      }
+      for (const m of batch) {
+        try {
+          const result = await fn(m, ctx)
+          if (service && m.replyTo) await reply(m, result)
+          await m.ack()
+        } catch (e) {
+          try {
+            if (e instanceof Permanent) {
+              if (service && m.replyTo) await reply(m, { error: e.message })
+              await m.ack()
+            } else if (!(e instanceof ClankrError)) {
+              await m.nack({ delaySeconds: 1, reason: String(e) })
+            } else {
+              await ctx.log(`${queue}: ${e.message}`, "warn") // e.g. StaleLease: it went to another instance
+            }
+          } catch {
+            // the lease is gone; the message comes back by itself
+          }
+        }
+      }
+    }
   }
 
   private async handle(conn: Conn, ctx: Context, d: Frame): Promise<void> {
