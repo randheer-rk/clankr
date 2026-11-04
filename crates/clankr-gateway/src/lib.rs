@@ -11,6 +11,7 @@ use clankr_types::{ApiError, ErrorCode, RequestCtx};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod a2a;
 pub mod aws;
 pub mod chat;
 mod providers;

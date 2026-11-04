@@ -30,6 +30,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::watch;
 
+mod a2a;
 mod approvals;
 pub mod audit_export;
 pub mod authz;
@@ -153,6 +154,7 @@ pub fn router(state: AppState) -> Router {
         .merge(quota::routes())
         .merge(approvals::routes())
         .merge(images::routes())
+        .merge(a2a::routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))

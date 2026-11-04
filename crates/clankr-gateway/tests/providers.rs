@@ -167,7 +167,7 @@ async fn gemini_and_vertex_share_the_body_and_differ_in_auth() {
 
 fn base64_url(s: &str) -> Vec<u8> {
     let mut v: Vec<u8> = s.bytes().map(|b| match b { b'-' => b'+', b'_' => b'/', x => x }).collect();
-    while v.len() % 4 != 0 {
+    while !v.len().is_multiple_of(4) {
         v.push(b'=');
     }
     let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

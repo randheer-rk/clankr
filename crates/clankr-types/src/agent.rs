@@ -324,11 +324,29 @@ pub fn admit_mailbox(spec: &serde_json::Value) -> Result<MailboxSpec, ApiError> 
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentServiceSpec {
     pub agent: String,
+    /// What the service does, for people and for its A2A agent card (ADR 0038).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Skills advertised on the A2A agent card. Empty: one skill named after the service.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<Skill>,
     #[serde(default = "default_max_deliveries")]
     pub max_deliveries: i32,
     /// How long a reply is kept for its caller (requests expire at their call's timeout).
     #[serde(default = "default_retention")]
     pub retention_seconds: i64,
+}
+
+/// One thing an A2A agent card says the service can do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Skill {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 pub fn admit_agent_service(spec: &serde_json::Value) -> Result<AgentServiceSpec, ApiError> {

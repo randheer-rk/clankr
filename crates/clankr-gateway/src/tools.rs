@@ -67,6 +67,16 @@ pub enum Executor {
     /// Sends to a chat through a ChatConnector in the namespace. One method, `send`, with
     /// input `{chat, text}`; the bot token is brokered here and never reaches the agent.
     Chat { connector: String },
+    /// An A2A agent (JSON-RPC endpoint from its agent card). Each method sends one message:
+    /// `input.text` as a text part, the rest of the input as a data part; a Task is polled
+    /// until it finishes. The credential goes in `header` (`Bearer …` added for authorization).
+    A2a {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret_ref: Option<SecretRef>,
+        #[serde(default = "default_header")]
+        header: String,
+    },
 }
 
 fn default_header() -> String {
@@ -206,7 +216,7 @@ pub fn admit_tool(spec: &Value) -> Result<ToolSpec, ApiError> {
         return Err(invalid("spec.methods", "declare at least one method"));
     }
     match &s.executor {
-        Executor::Http { url, .. } | Executor::McpHttp { url, .. } => crate::check_endpoint(url).map_err(|e| invalid("spec.executor.url", e.message))?,
+        Executor::Http { url, .. } | Executor::McpHttp { url, .. } | Executor::A2a { url, .. } => crate::check_endpoint(url).map_err(|e| invalid("spec.executor.url", e.message))?,
         Executor::Sandbox { container } | Executor::McpStdio { container } => admit_container(container).map_err(|e| invalid("spec.executor.container", e))?,
         Executor::Mock { .. } => {}
         Executor::Chat { connector } => {
@@ -576,6 +586,26 @@ impl Gateway {
                 let token = self.store.secret_read(ctx, &self.master, ns, &spec.token_ref.name, &spec.token_ref.key, &format!("tool gateway: {}", call.tool)).await?;
                 let sent = crate::chat::send(&self.http, spec.kind, &spec.endpoint, &token, chat, text, &[]).await?;
                 Ok(json!({"chat": sent.chat, "message": sent.message}))
+            }
+            Executor::A2a { url, secret_ref, header } => {
+                let secret = match secret_ref {
+                    Some(r) => Some(self.store.secret_read(ctx, &self.master, ns, &r.name, &r.key, &format!("tool gateway: {}", call.tool)).await?),
+                    None => None,
+                };
+                let value = secret.map(|v| if header == "authorization" && !v.starts_with("Bearer ") { format!("Bearer {v}") } else { v });
+                let auth = value.as_deref().map(|v| (header.as_str(), v));
+                let (text, data) = match &call.input {
+                    Value::Object(o) if o.get("text").is_some_and(Value::is_string) => {
+                        let mut rest = o.clone();
+                        let t = rest.remove("text").and_then(|t| t.as_str().map(str::to_owned));
+                        (t, (!rest.is_empty()).then_some(Value::Object(rest)))
+                    }
+                    Value::Null => (None, None),
+                    v => (None, Some(v.clone())),
+                };
+                let deadline = Instant::now() + Duration::from_secs(tool.timeout_seconds.saturating_sub(1));
+                let reply = crate::a2a::send_and_wait(&self.http, url, auth, text.as_deref(), data.as_ref(), deadline).await?;
+                Ok(json!({"text": crate::a2a::text_of(&reply), "data": crate::a2a::data_of(&reply), "parts": reply["parts"]}))
             }
             Executor::Http { url, secret_ref, header } => {
                 let mut rb = self.http.post(url).json(&json!({"method": call.method, "input": call.input, "idempotencyKey": call.idempotency_key, "runId": call.run_id, "task": call.task}));

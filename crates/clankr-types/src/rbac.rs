@@ -176,6 +176,10 @@ pub fn required(method: &str, path: &str) -> Option<(Option<String>, Perm)> {
         ["v1", "namespaces", n, "mailboxes", ..] => (ns(n), WorkExecute),
         ["v1", "namespaces", n, "services", _, "call" | "reply"] | ["v1", "namespaces", n, "topics", _, "publish"] => (ns(n), WorkExecute),
         ["v1", "namespaces", n, "usage", ..] => (ns(n), ResourcesRead),
+        // A2A: the agent card reads like a resource; sending a message is agent work
+        ["a2a", n, _, ".well-known", ..] => (ns(n), ResourcesRead),
+        ["a2a", n, _] => (ns(n), WorkExecute),
+        ["metrics"] => (None, AuditRead),
         ["v1", "namespaces", n, plural, ..] => {
             let rbac = matches!(*plural, "rolebindings" | "serviceaccounts");
             (ns(n), if read { ResourcesRead } else if rbac { RbacWrite } else { ResourcesWrite })
