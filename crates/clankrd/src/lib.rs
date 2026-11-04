@@ -34,6 +34,7 @@ mod approvals;
 pub mod audit_export;
 pub mod authz;
 pub mod backup;
+pub mod chat;
 mod contexts;
 pub mod cron;
 mod exec;
@@ -407,6 +408,7 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "EventSubscription" => clankr_types::agent::admit_event_subscription(&r.spec).map(drop),
         "AgentCronJob" => clankr_types::schedule::admit_cron_job(&r.spec).map(drop),
         "EventTrigger" => clankr_types::schedule::admit_event_trigger(&r.spec).map(drop),
+        "ChatConnector" => clankr_types::chat::admit_chat_connector(&r.spec).map(drop),
         k if NOT_BUILT.contains(&k) => Err(ApiError::new(
             ErrorCode::UnsupportedCapability,
             format!("{k} is part of the resource model but has no controller yet, so a {k} would do nothing; see `What isn't built yet` in the README"),

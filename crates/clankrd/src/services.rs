@@ -42,30 +42,47 @@ struct CallBody {
 }
 
 async fn call(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, headers: HeaderMap, Path((ns, svc)): Path<(String, String)>, Json(b): Json<CallBody>) -> ApiResult<Json<Value>> {
-    let queue = format!("svc:{svc}");
-    let (spec, sender) = authorize(&s, &ctx, &headers, &ns, &queue, true).await?;
+    let (_, sender) = authorize(&s, &ctx, &headers, &ns, &format!("svc:{svc}"), true).await?;
     let timeout = b.timeout_seconds.unwrap_or(30).clamp(1, 300);
+    let req = service_request(&s, &ns, &svc, &sender, &b.payload, timeout, b.dedup_key.as_deref()).await?;
+    Ok(Json(service_reply(&s, &ns, &svc, req, timeout).await?))
+}
+
+/// A request in flight: where its reply will land.
+pub(crate) struct Pending {
+    pub id: Uuid,
+    pub reply_queue: String,
+}
+
+/// Enqueues a request for `svc` as `sender` (already authorized). Shared by the API and by
+/// chat connectors, which call as the chat they bridge.
+pub(crate) async fn service_request(s: &AppState, ns: &str, svc: &str, sender: &str, payload: &Value, timeout: u64, dedup_key: Option<&str>) -> Result<Pending, ApiError> {
+    let queue = format!("svc:{svc}");
+    let spec = clankr_types::agent::admit_agent_service(&s.store.get(ns, "AgentService", svc).await?.spec)?;
     let id = Uuid::new_v4().to_string();
     let reply_q = format!("reply:{id}");
-    let opts = SendOpts { sender: &sender, correlation_id: Some(&id), dedup_key: b.dedup_key.as_deref(), ttl_secs: timeout as i64, max_deliveries: spec.max_deliveries, reply_to: Some(&reply_q) };
+    let opts = SendOpts { sender, correlation_id: Some(&id), dedup_key, ttl_secs: timeout as i64, max_deliveries: spec.max_deliveries, reply_to: Some(&reply_q) };
     // a retried call with the same dedup key waits on the original request's reply
-    let (req, _) = s.store.mailbox_send(&ns, &queue, &b.payload, opts).await?;
-    let reply_q = req.reply_to.clone().unwrap_or(reply_q);
+    let (req, _) = s.store.mailbox_send(ns, &queue, payload, opts).await?;
+    Ok(Pending { reply_queue: req.reply_to.clone().unwrap_or(reply_q), id: req.id })
+}
+
+/// Waits up to `timeout` seconds for the reply to a request.
+pub(crate) async fn service_reply(s: &AppState, ns: &str, svc: &str, req: Pending, timeout: u64) -> Result<Value, ApiError> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
     let mut wake = s.mailbox_events.clone();
     loop {
         wake.borrow_and_update();
-        if let Some(m) = s.store.mailbox_receive(&ns, &reply_q, "caller", 1, 60.0).await?.pop() {
-            s.store.mailbox_ack(&ns, &reply_q, m.id, m.lease_epoch).await?;
-            return Ok(Json(json!({"reply": m.payload, "requestId": req.id, "from": m.sender})));
+        if let Some(m) = s.store.mailbox_receive(ns, &req.reply_queue, "caller", 1, 60.0).await?.pop() {
+            s.store.mailbox_ack(ns, &req.reply_queue, m.id, m.lease_epoch).await?;
+            return Ok(json!({"reply": m.payload, "requestId": req.id, "from": m.sender}));
         }
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         if left.is_zero() {
             return Err(ApiError::new(
                 ErrorCode::OutcomeUnknown,
                 format!("service {svc} didn't reply within {timeout}s; an untaken request expires unprocessed, but one already being handled may still finish"),
-            )
-            .into());
+            ));
         }
         let _ = tokio::time::timeout(left.min(Duration::from_secs(1)), wake.changed()).await;
     }

@@ -165,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
         clankrd::audit_export::spawn(store.clone(), holder.clone(), dest, std::time::Duration::from_secs(2));
     }
     clankrd::cron::spawn(store.clone(), clankr_engine::Engine::new(store.clone()), holder.clone(), std::time::Duration::from_secs(15));
+    clankrd::chat::spawn(state.clone(), holder.clone(), std::time::Duration::from_secs(10));
     clankrd::scheduler::spawn(store, holder, std::time::Duration::from_secs(1));
     let app = clankrd::router(state);
 

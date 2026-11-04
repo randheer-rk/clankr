@@ -64,6 +64,9 @@ pub enum Executor {
     },
     /// A stdio MCP server, started in a fresh sandbox container for each call.
     McpStdio { container: Container },
+    /// Sends to a chat through a ChatConnector in the namespace. One method, `send`, with
+    /// input `{chat, text}`; the bot token is brokered here and never reaches the agent.
+    Chat { connector: String },
 }
 
 fn default_header() -> String {
@@ -206,6 +209,14 @@ pub fn admit_tool(spec: &Value) -> Result<ToolSpec, ApiError> {
         Executor::Http { url, .. } | Executor::McpHttp { url, .. } => crate::check_endpoint(url).map_err(|e| invalid("spec.executor.url", e.message))?,
         Executor::Sandbox { container } | Executor::McpStdio { container } => admit_container(container).map_err(|e| invalid("spec.executor.container", e))?,
         Executor::Mock { .. } => {}
+        Executor::Chat { connector } => {
+            if connector.is_empty() {
+                return Err(invalid("spec.executor.connector", "name the ChatConnector"));
+            }
+            if s.methods.keys().any(|m| m != "send") {
+                return Err(invalid("spec.methods", "a chat tool has one method: send"));
+            }
+        }
     }
     if !(1..=600).contains(&s.timeout_seconds) || !(1..=16 << 20).contains(&s.max_output_bytes) {
         return Err(invalid("spec", "timeoutSeconds 1..600, maxOutputBytes 1..16MiB"));
@@ -555,6 +566,16 @@ impl Gateway {
                     None => None,
                 };
                 mcp_http(&self.http, url, secret.as_deref().map(|v| (header.as_str(), v)), &call.method, &call.input).await
+            }
+            Executor::Chat { connector } => {
+                let spec = clankr_types::chat::admit_chat_connector(&self.store.get(ns, "ChatConnector", connector).await?.spec)?;
+                let (chat, text) = (call.input["chat"].as_str().unwrap_or_default(), call.input["text"].as_str().unwrap_or_default());
+                if chat.is_empty() || text.is_empty() {
+                    return Err(invalid("input", "send needs {chat, text}"));
+                }
+                let token = self.store.secret_read(ctx, &self.master, ns, &spec.token_ref.name, &spec.token_ref.key, &format!("tool gateway: {}", call.tool)).await?;
+                let sent = crate::chat::send(&self.http, spec.kind, &spec.endpoint, &token, chat, text, &[]).await?;
+                Ok(json!({"chat": sent.chat, "message": sent.message}))
             }
             Executor::Http { url, secret_ref, header } => {
                 let mut rb = self.http.post(url).json(&json!({"method": call.method, "input": call.input, "idempotencyKey": call.idempotency_key, "runId": call.run_id, "task": call.task}));
