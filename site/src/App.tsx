@@ -15,17 +15,9 @@ function Up({ children, delay = 0, className, y = 40 }: { children: ReactNode; d
   )
 }
 
-function Lockbot({ eyes = 0 }: { eyes?: number }) {
-  return (
-    <svg viewBox="8 6 104 112" aria-hidden>
-      <path d="M37 52V37a23 23 0 0 1 46 0v15" fill="none" stroke="#efe9dc" strokeWidth="8" strokeLinecap="round" />
-      <rect x="16" y="50" width="88" height="60" rx="26" fill="none" stroke="#efe9dc" strokeWidth="8" />
-      <g style={{ transform: `translateX(${eyes}px)` }}>
-        <rect className="eye" x="44" y="71" width="8" height="19" rx="4" fill="#ff5f1f" />
-        <rect className="eye" x="68" y="71" width="8" height="19" rx="4" fill="#ff5f1f" />
-      </g>
-    </svg>
-  )
+/** The Lockbot, as the animated SVG in docs/assets: its eyes look around and blink on their own. */
+function Lockbot({ size = 26 }: { size?: number }) {
+  return <img src="./clankr-mark-animated.svg" width={size} height={Math.round(size * 112 / 104)} alt="" draggable={false} />
 }
 
 /* ── hero ─────────────────────────────────────────────────── */
@@ -39,16 +31,6 @@ function Hero() {
   const botR = useTransform(scrollYProgress, [0, 1], [0, -6])
   const textY = useTransform(scrollYProgress, [0, 1], [0, 60])
   const fade = useTransform(scrollYProgress, [0, 0.7], [1, 0])
-  // the eyes drift as the page moves, and blink now and then
-  const [eyes, setEyes] = useState(0)
-  const [blink, setBlink] = useState(false)
-  useMotionValueEvent(scrollYProgress, "change", v => setEyes(v * 10))
-  useEffect(() => {
-    let t: number
-    const go = () => { setBlink(true); setTimeout(() => setBlink(false), 140); t = window.setTimeout(go, 2600 + Math.random() * 3000) }
-    t = window.setTimeout(go, 1800)
-    return () => clearTimeout(t)
-  }, [])
   return (
     <header ref={ref} className="hero">
       <div className="wrap">
@@ -75,7 +57,7 @@ function Hero() {
           </motion.div>
         </motion.div>
         <motion.div className="bot" style={{ y: botY, rotate: botR }} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 1.2, ease, delay: 0.3 }}>
-          <div style={{ transform: `scaleY(${blink ? 0.1 : 1})`, transformOrigin: "50% 60%", transition: "transform .12s" }}><Lockbot eyes={eyes} /></div>
+          <Lockbot size={360} />
           <div className="plate-tag">Model <b>Lockbot</b><br />Rust · Postgres · one binary<br />Ser. no. <b>0.1.0</b></div>
         </motion.div>
       </div>

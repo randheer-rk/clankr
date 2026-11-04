@@ -49,7 +49,7 @@ p { margin: 0; }
 .nav.on { border-color: var(--line); }
 .nav .wrap { display: flex; align-items: center; gap: 32px; height: 72px; font: 500 13px var(--mono); text-transform: uppercase; letter-spacing: .12em; }
 .nav .wm { display: flex; align-items: center; gap: 12px; font: 900 24px var(--head); letter-spacing: -.03em; text-transform: none; margin-right: auto; }
-.nav .wm svg { width: 26px; }
+.nav .wm img { width: 26px; height: auto; }
 .nav a.x { color: var(--mute); transition: color .3s; }
 .nav a.x:hover { color: var(--cream); }
 .nav a.gh { color: var(--rust); }
@@ -62,7 +62,7 @@ p { margin: 0; }
 .hero .lede { margin-top: 32px; }
 .hero .row { margin-top: 32px; }
 .bot { position: relative; align-self: stretch; display: flex; align-items: center; justify-content: center; min-height: 420px; }
-.bot svg { width: 360px; filter: drop-shadow(0 30px 40px rgba(0, 0, 0, .55)); }
+.bot img { width: 360px; height: auto; filter: drop-shadow(0 30px 40px rgba(0, 0, 0, .55)); }
 .plate-tag { position: absolute; right: 0; top: 0; font: 12px/1.8 var(--mono); color: var(--mute); text-align: right; letter-spacing: .06em; text-transform: uppercase; }
 .plate-tag b { color: var(--rust); font-weight: 500; }
 
@@ -142,7 +142,7 @@ footer a:hover { color: var(--cream); }
   .hero { padding-top: 110px; min-height: 0; }
   .hero .wrap, .head, .plates, .films, .replay, .say, .qs { grid-template-columns: 1fr; }
   .bot { min-height: 240px; order: -1; justify-content: flex-start; }
-  .bot svg { width: 170px; }
+  .bot img { width: 170px; }
   .replay .pin { position: static; }
   .step { min-height: 0; padding: 32px 0; }
   .step h3 { font-size: 32px; }
