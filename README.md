@@ -579,6 +579,7 @@ crates/
   clankr-types/     shared types: resources, specs, RBAC, schedules, the agent wire protocol
 sdk/                Python, TypeScript and Go SDKs, and base images
 ui/                 web UI (React + Vite), embedded into clankrd
+site/               landing page (React, Vite, Remotion films)
 docs/adr/           one short document per design decision
 docs/runbooks/      operational procedures
 ```
