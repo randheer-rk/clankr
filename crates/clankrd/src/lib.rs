@@ -46,6 +46,7 @@ pub mod telemetry;
 pub mod tls;
 mod ui;
 mod mailboxes;
+mod metrics;
 mod models;
 mod nodes;
 mod quota;
@@ -138,6 +139,7 @@ pub fn spawn_tool_sweeper(gateway: clankr_gateway::Gateway) {
 pub fn router(state: AppState) -> Router {
     let v1 = Router::new()
         .route("/v1/audit", get(audit))
+        .route("/metrics", get(metrics::metrics))
         .route("/v1/{plural}", get(list_all))
         .route("/v1/namespaces/{ns}/{plural}", get(list).post(create))
         .route("/v1/namespaces/{ns}/{plural}/{name}", get(read).put(update).delete(delete))

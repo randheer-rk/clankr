@@ -321,7 +321,8 @@ fn bound(v: Value, max: usize) -> (Value, bool) {
 
 impl Gateway {
     /// One tool call, end to end. See the module doc for the checks, in order.
-    #[tracing::instrument(name = "tool.call", skip(self, ctx, call), fields(claim, tool = %call.tool, method = %call.method, actor = %ctx.actor, outcome = tracing::field::Empty))]
+    #[tracing::instrument(name = "tool.call", skip(self, ctx, call), fields(claim, tool = %call.tool, method = %call.method, actor = %ctx.actor, outcome = tracing::field::Empty,
+        otel.name = %format!("execute_tool {}", call.tool), gen_ai.operation.name = "execute_tool", gen_ai.tool.name = %call.tool, gen_ai.tool.call.id = %call.idempotency_key, error.type = tracing::field::Empty))]
     pub async fn call_tool(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, call: ToolCall) -> Result<ToolResult, ApiError> {
         match self.call_tool_at(ctx, ns, claim_name, call, Placement::Here).await? {
             Outcome::Done(r) => Ok(r),
@@ -482,6 +483,9 @@ impl Gateway {
             Ran::Finished(Err(e)) => ("failed", None, Some(e)),
         };
         tracing::Span::current().record("outcome", state);
+        if let Some(e) = &err {
+            tracing::Span::current().record("error.type", format!("{:?}", e.code).as_str());
+        }
         let (output, truncated) = output.map_or((Value::Null, false), |v| bound(v, tool.max_output_bytes));
         let output_sha = (state == "done").then(|| sha(&output));
 

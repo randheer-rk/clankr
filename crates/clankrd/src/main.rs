@@ -52,7 +52,8 @@ struct Args {
     /// vault+https://vault:8200/<transit mount>/<key> (token from $VAULT_TOKEN).
     #[arg(long, env = "CLANKR_KMS", global = true)]
     kms: Option<String>,
-    /// Ship the audit chain off-site as it's written: file:///path.jsonl or https://receiver.
+    /// Ship the audit chain off-site as it's written: file:///path.jsonl, s3://bucket/prefix
+    /// (AWS_* credentials; CLANKR_AUDIT_S3_ENDPOINT for MinIO) or https://receiver.
     #[arg(long, env = "CLANKR_AUDIT_EXPORT")]
     audit_export: Option<String>,
     /// Directory with pg_dump/pg_restore (default: PATH, or the embedded server's with --dev).
@@ -81,9 +82,9 @@ enum Cmd {
     },
     /// Check a database against a backup's manifest (audit chain, secrets, run replay, counts).
     Verify { dir: PathBuf },
-    /// Compare an off-site audit export (JSONL) with the database: exit 1 if rows were removed or
-    /// changed, or the export itself was edited.
-    AuditCheck { export: PathBuf },
+    /// Compare an off-site audit export (a JSONL file, or s3://bucket/prefix) with the database:
+    /// exit 1 if rows were removed or changed, or the export itself was edited.
+    AuditCheck { export: String },
     /// Rewrap every secret's data key with the current key-encryption key: moves secrets onto
     /// --kms (or a rotated Vault key version), and upgrades rows from before envelope encryption.
     RewrapSecrets,
@@ -211,7 +212,12 @@ async fn run_maintenance(cmd: Cmd, url: &str, data_dir: &std::path::Path, pg_bin
         }
         Cmd::AuditCheck { export } => {
             let store = Store::connect(url).await.context("connect metadata store")?;
-            let c = clankrd::audit_export::audit_check(&store, &std::fs::read_to_string(&export).with_context(|| format!("read {}", export.display()))?).await?;
+            let copy = if export.starts_with("s3://") {
+                clankrd::audit_export::read_s3(&reqwest::Client::new(), &export).await?
+            } else {
+                std::fs::read_to_string(&export).with_context(|| format!("read {export}"))?
+            };
+            let c = clankrd::audit_export::audit_check(&store, &copy).await?;
             println!("{} rows in the export", c.exported);
             if let Some(s) = c.export_broken_at {
                 println!("FAIL  the export's own chain breaks at seq {s} (it was edited or is incomplete)");

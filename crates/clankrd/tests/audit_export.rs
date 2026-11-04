@@ -57,3 +57,68 @@ async fn export_catches_superuser_tampering() {
     let edited = copy.replacen("user-3", "user-x", 1);
     assert_eq!(audit_check(&store, &edited).await.unwrap().export_broken_at, Some(4));
 }
+
+/// A path-style S3 fake: PUT stores, GET returns, `?list-type=2` lists as XML. It checks that
+/// every request is SigV4-signed for the s3 service and that the body hash header is right.
+#[tokio::test(flavor = "multi_thread")]
+async fn s3_export_is_signed_and_readable_back() {
+    use axum::extract::{Path, Query, State};
+    use axum::http::HeaderMap;
+    use std::collections::BTreeMap;
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    type Objects = Arc<Mutex<BTreeMap<String, String>>>;
+    let objects: Objects = Default::default();
+    fn check(h: &HeaderMap, body: &[u8]) {
+        let auth = h.get("authorization").expect("signed").to_str().unwrap();
+        assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=AKIDTEST/") && auth.contains("/eu-central-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature="), "{auth}");
+        let sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(body));
+        assert_eq!(h.get("x-amz-content-sha256").unwrap().to_str().unwrap(), sha, "the body hash is signed");
+        assert!(h.get("x-amz-date").is_some());
+    }
+    async fn put(State(o): State<Objects>, Path((bucket, key)): Path<(String, String)>, h: HeaderMap, body: String) -> &'static str {
+        assert_eq!(bucket, "audit-bucket");
+        check(&h, body.as_bytes());
+        o.lock().unwrap().insert(key, body);
+        ""
+    }
+    async fn get_object(State(o): State<Objects>, Path((_, key)): Path<(String, String)>, h: HeaderMap) -> String {
+        check(&h, b"");
+        o.lock().unwrap().get(&key).cloned().unwrap_or_default()
+    }
+    async fn list(State(o): State<Objects>, Path(_bucket): Path<String>, Query(q): Query<BTreeMap<String, String>>, h: HeaderMap) -> String {
+        check(&h, b"");
+        assert_eq!(q.get("list-type").map(String::as_str), Some("2"));
+        let prefix = q.get("prefix").cloned().unwrap_or_default();
+        let keys: String = o.lock().unwrap().keys().filter(|k| k.starts_with(&prefix)).map(|k| format!("<Contents><Key>{k}</Key></Contents>")).collect();
+        format!("<ListBucketResult><IsTruncated>false</IsTruncated>{keys}</ListBucketResult>")
+    }
+    let app = axum::Router::new().route("/{bucket}/{*key}", axum::routing::put(put).get(get_object)).route("/{bucket}", axum::routing::get(list)).with_state(objects.clone());
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    // SAFETY: test-only process environment, set before any reader
+    unsafe {
+        std::env::set_var("AWS_ACCESS_KEY_ID", "AKIDTEST");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "sekrit");
+        std::env::set_var("AWS_REGION", "eu-central-1");
+        std::env::set_var("CLANKR_AUDIT_S3_ENDPOINT", &endpoint);
+    }
+
+    let pg = DevPostgres::start(None).await.unwrap();
+    let store = Store::connect(&pg.database("clankr").await.unwrap()).await.unwrap();
+    for i in 0..3 {
+        store.audit_deny(&ctx(&format!("s3-{i}")), "probe", "test").await.unwrap();
+    }
+    let http = reqwest::Client::new();
+    let dest = "s3://audit-bucket/clankr/prod";
+    assert_eq!(export_once(&store, &http, dest).await.unwrap(), 3);
+    store.audit_deny(&ctx("s3-3"), "probe", "test").await.unwrap();
+    assert_eq!(export_once(&store, &http, dest).await.unwrap(), 1);
+    let keys: Vec<String> = objects.lock().unwrap().keys().cloned().collect();
+    assert_eq!(keys, ["clankr/prod/audit-000000000001-000000000003.jsonl", "clankr/prod/audit-000000000004-000000000004.jsonl"], "one object per batch, named by its seq range");
+
+    let copy = clankrd::audit_export::read_s3(&http, dest).await.unwrap();
+    assert_eq!(copy.lines().count(), 4);
+    let c = audit_check(&store, &copy).await.unwrap();
+    assert!(c.ok() && c.exported == 4, "{c:?}");
+}

@@ -9,6 +9,7 @@ use clankr_store::Store;
 use clankr_store::secrets::MasterKey;
 use clankr_types::{ApiError, ErrorCode, RequestCtx};
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 use uuid::Uuid;
 
 pub mod a2a;
@@ -329,24 +330,37 @@ impl Gateway {
         self
     }
 
-    #[tracing::instrument(name = "model.generate", skip(self, ctx, req), fields(
-        run_id = req.run_id.map(|r| r.to_string()), task = req.task.as_deref(), actor = %ctx.actor,
-        provider = tracing::field::Empty, model = tracing::field::Empty,
-        input_tokens = tracing::field::Empty, output_tokens = tracing::field::Empty, outcome = tracing::field::Empty,
-    ))]
+    /// The claim and its connection, loaded per call so deleting or editing either takes
+    /// effect immediately (SEC-18), with the model checked against the allowlist.
+    async fn resolve(&self, ns: &str, claim_name: &str) -> Result<(ModelClaimSpec, ProviderConnectionSpec, String), ApiError> {
+        let claim = admit_claim(&self.store.get(ns, "ModelClaim", claim_name).await?.spec)?;
+        let conn = admit_connection(&self.store.get(ns, "ProviderConnection", &claim.provider_connection).await?.spec)?;
+        if !conn.allowed_models.contains(&claim.model) {
+            return Err(ApiError::new(ErrorCode::Forbidden, format!("model {} is not in allowedModels of ProviderConnection {}", claim.model, claim.provider_connection)));
+        }
+        let provider_name = serde_json::to_value(conn.provider).unwrap().as_str().unwrap_or_default().to_owned();
+        Ok((claim, conn, provider_name))
+    }
+
+    /// One chat call. The span is named and attributed per the OpenTelemetry GenAI semantic
+    /// conventions (`chat {model}`, `gen_ai.*`); prompts never land in attributes (CL-34-05).
     pub async fn generate(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, req: GenerateRequest) -> Result<GenerateResponse, ApiError> {
         if req.messages.is_empty() {
             return Err(invalid("messages", "at least one message"));
         }
-        // loaded per call: deleting or editing either resource takes effect immediately (SEC-18)
-        let claim = admit_claim(&self.store.get(ns, "ModelClaim", claim_name).await?.spec)?;
-        let conn = admit_connection(&self.store.get(ns, "ProviderConnection", &claim.provider_connection).await?.spec)?;
-        if !conn.allowed_models.contains(&claim.model) {
-            return Err(ApiError::new(
-                ErrorCode::Forbidden,
-                format!("model {} is not in allowedModels of ProviderConnection {}", claim.model, claim.provider_connection),
-            ));
-        }
+        let (claim, conn, provider_name) = self.resolve(ns, claim_name).await?;
+        let span = tracing::info_span!("model.generate", otel.name = %format!("chat {}", claim.model),
+            run_id = req.run_id.map(|r| r.to_string()), task = req.task.as_deref(), actor = %ctx.actor,
+            provider = %provider_name, model = %claim.model,
+            input_tokens = tracing::field::Empty, output_tokens = tracing::field::Empty, outcome = tracing::field::Empty,
+            gen_ai.operation.name = "chat", gen_ai.provider.name = %provider_name, gen_ai.request.model = %claim.model,
+            gen_ai.request.max_tokens = tracing::field::Empty, gen_ai.usage.input_tokens = tracing::field::Empty,
+            gen_ai.usage.output_tokens = tracing::field::Empty, gen_ai.response.finish_reasons = tracing::field::Empty,
+            error.type = tracing::field::Empty);
+        self.generate_in(ctx, ns, claim_name, claim, conn, req).instrument(span).await
+    }
+
+    async fn generate_in(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, claim: ModelClaimSpec, conn: ProviderConnectionSpec, req: GenerateRequest) -> Result<GenerateResponse, ApiError> {
         let max_out = req.max_output_tokens.unwrap_or(claim.limits.max_output_tokens).min(claim.limits.max_output_tokens);
         let est_in = estimate_input(&req);
         if let Some(max_in) = claim.limits.max_input_tokens
@@ -373,8 +387,7 @@ impl Gateway {
         let latency = started.elapsed().as_millis() as i64;
 
         let span = tracing::Span::current();
-        span.record("provider", serde_json::to_value(conn.provider).unwrap().as_str().unwrap_or_default());
-        span.record("model", claim.model.as_str());
+        span.record("gen_ai.request.max_tokens", max_out);
         let (usage, outcome, stop) = match &result {
             Ok(r) => (r.usage.clone(), "ok".to_owned(), r.stop_reason.clone()),
             // ponytail: a failed call releases its reservation; providers that bill partial failures will under-count
@@ -382,6 +395,14 @@ impl Gateway {
         };
         span.record("input_tokens", usage.input_tokens);
         span.record("output_tokens", usage.output_tokens);
+        span.record("gen_ai.usage.input_tokens", usage.input_tokens);
+        span.record("gen_ai.usage.output_tokens", usage.output_tokens);
+        if let Some(st) = &stop {
+            span.record("gen_ai.response.finish_reasons", st.as_str());
+        }
+        if let Err(e) = &result {
+            span.record("error.type", format!("{:?}", e.code).as_str());
+        }
         span.record("outcome", outcome.as_str());
         let cost = price.map(|p| p.micro_usd(usage.input_tokens, usage.output_tokens));
         self.settle(&buckets, ns, (reservation, usage.input_tokens + usage.output_tokens), (cost_reservation, cost.unwrap_or(0))).await?;
@@ -455,21 +476,21 @@ impl Gateway {
     }
 
     /// Embeddings through the same claim, allowlist, budget and record as `generate`.
-    #[tracing::instrument(name = "model.embed", skip(self, ctx, req), fields(
-        run_id = req.run_id.map(|r| r.to_string()), task = req.task.as_deref(), actor = %ctx.actor,
-        provider = tracing::field::Empty, model = tracing::field::Empty, input_tokens = tracing::field::Empty, outcome = tracing::field::Empty,
-        otel.name = tracing::field::Empty, gen_ai.operation.name = "embeddings", gen_ai.provider.name = tracing::field::Empty,
-        gen_ai.request.model = tracing::field::Empty, gen_ai.usage.input_tokens = tracing::field::Empty,
-    ))]
     pub async fn embed(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
         if req.inputs.is_empty() || req.inputs.len() > 256 {
             return Err(invalid("inputs", "1..256 texts"));
         }
-        let claim = admit_claim(&self.store.get(ns, "ModelClaim", claim_name).await?.spec)?;
-        let conn = admit_connection(&self.store.get(ns, "ProviderConnection", &claim.provider_connection).await?.spec)?;
-        if !conn.allowed_models.contains(&claim.model) {
-            return Err(ApiError::new(ErrorCode::Forbidden, format!("model {} is not in allowedModels of ProviderConnection {}", claim.model, claim.provider_connection)));
-        }
+        let (claim, conn, provider_name) = self.resolve(ns, claim_name).await?;
+        let span = tracing::info_span!("model.embed", otel.name = %format!("embeddings {}", claim.model),
+            run_id = req.run_id.map(|r| r.to_string()), task = req.task.as_deref(), actor = %ctx.actor,
+            provider = %provider_name, model = %claim.model, input_tokens = tracing::field::Empty, outcome = tracing::field::Empty,
+            gen_ai.operation.name = "embeddings", gen_ai.provider.name = %provider_name, gen_ai.request.model = %claim.model,
+            gen_ai.usage.input_tokens = tracing::field::Empty);
+        self.embed_in(ctx, ns, claim_name, claim, conn, provider_name, req).instrument(span).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn embed_in(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, claim: ModelClaimSpec, conn: ProviderConnectionSpec, provider_name: String, req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
         let est_in: i64 = req.inputs.iter().map(|s| (s.len() as i64 / 4).max(1)).sum();
         let buckets = self.buckets(ns, claim_name, &claim.budget, req.run_id).await?;
         let price = conn.pricing.get(&claim.model).copied();
@@ -482,13 +503,7 @@ impl Gateway {
         let started = Instant::now();
         let result = providers::embed(&self.http, &conn, &claim.model, key.as_deref(), &req.inputs).await;
         let latency = started.elapsed().as_millis() as i64;
-        let provider_name = serde_json::to_value(conn.provider).unwrap().as_str().unwrap_or_default().to_owned();
         let span = tracing::Span::current();
-        span.record("provider", provider_name.as_str());
-        span.record("model", claim.model.as_str());
-        span.record("otel.name", format!("embeddings {}", claim.model).as_str());
-        span.record("gen_ai.provider.name", provider_name.as_str());
-        span.record("gen_ai.request.model", claim.model.as_str());
         let (used, outcome) = match &result {
             Ok(e) => (e.input_tokens, "ok".to_owned()),
             Err(e) => (0, format!("error:{:?}", e.code)),

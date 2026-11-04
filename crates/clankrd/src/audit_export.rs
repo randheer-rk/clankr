@@ -8,6 +8,10 @@
 //!   that only appends (`chattr +a`, a WORM mount, a log shipper's spool).
 //! - `https://…`: each batch is POSTed as NDJSON (`$CLANKR_AUDIT_EXPORT_TOKEN` as a bearer
 //!   token); any 2xx counts as received.
+//! - `s3://bucket/prefix`: each batch is one object, `prefix/audit-<first>-<last>.jsonl`, PUT
+//!   with SigV4 from `$AWS_ACCESS_KEY_ID`/`$AWS_SECRET_ACCESS_KEY` (`$AWS_SESSION_TOKEN`), in
+//!   `$AWS_REGION` (default us-east-1). `$CLANKR_AUDIT_S3_ENDPOINT` points at MinIO or another
+//!   S3-compatible store (path-style). Turn on Object Lock on the bucket for a WORM copy.
 //!
 //! One replica exports at a time (leader lease `audit-export`). Delivery is at-least-once: after
 //! a crash a batch may be sent again, so receivers dedupe by `seq`.
@@ -44,7 +48,7 @@ pub fn spawn(store: Store, holder: String, dest: String, every: Duration) -> tok
 }
 
 /// URLs may carry credentials; logs get the scheme and host only.
-fn redact(dest: &str) -> String {
+pub(crate) fn redact(dest: &str) -> String {
     reqwest::Url::parse(dest).map(|u| format!("{}://{}", u.scheme(), u.host_str().unwrap_or(""))).unwrap_or_else(|_| "?".into())
 }
 
@@ -60,7 +64,7 @@ pub async fn export_once(store: &Store, http: &reqwest::Client, dest: &str) -> R
             bail!("audit chain doesn't continue from the exported copy at seq {seq}; refusing to export (run `clankrd audit-check`)");
         }
         let body: String = rows.iter().map(|r| serde_json::to_string(r).expect("serializable") + "\n").collect();
-        deliver(http, dest, &body).await?;
+        deliver(http, dest, &body, rows[0].seq, last.seq).await?;
         store.set_audit_export_cursor(dest, last.seq, &last.hash).await.map_err(|e| anyhow::anyhow!(e.message))?;
         sent += rows.len();
         if (rows.len() as i64) < BATCH {
@@ -69,7 +73,112 @@ pub async fn export_once(store: &Store, http: &reqwest::Client, dest: &str) -> R
     }
 }
 
-async fn deliver(http: &reqwest::Client, dest: &str, body: &str) -> Result<()> {
+/// An `s3://bucket/prefix` destination, resolved against the environment.
+struct S3 {
+    bucket: String,
+    prefix: String,
+    region: String,
+    endpoint: Option<String>,
+    creds: clankr_gateway::aws::Credentials,
+}
+
+impl S3 {
+    fn parse(dest: &str) -> Result<Self> {
+        let rest = dest.strip_prefix("s3://").context("not an s3:// destination")?;
+        let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+        anyhow::ensure!(!bucket.is_empty(), "s3:// destination needs a bucket");
+        let creds = clankr_gateway::aws::Credentials::from_env().context("s3 audit export needs AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY")?;
+        Ok(Self {
+            bucket: bucket.to_owned(),
+            prefix: prefix.trim_matches('/').to_owned(),
+            region: std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".into()),
+            endpoint: std::env::var("CLANKR_AUDIT_S3_ENDPOINT").ok().map(|e| e.trim_end_matches('/').to_owned()),
+            creds,
+        })
+    }
+
+    /// (url, host, canonical path) for a key, or for the bucket itself with an empty key.
+    fn target(&self, key: &str) -> Result<(reqwest::Url, String, String)> {
+        let path = match (&self.endpoint, key.is_empty()) {
+            (Some(_), true) => format!("/{}", self.bucket),
+            (Some(_), false) => format!("/{}/{key}", self.bucket),
+            (None, true) => "/".to_owned(),
+            (None, false) => format!("/{key}"),
+        };
+        let base = self.endpoint.clone().unwrap_or_else(|| format!("https://{}.s3.{}.amazonaws.com", self.bucket, self.region));
+        let url = reqwest::Url::parse(&format!("{base}{path}")).context("s3 endpoint")?;
+        let host = match url.port() {
+            Some(p) => format!("{}:{p}", url.host_str().unwrap_or_default()),
+            None => url.host_str().unwrap_or_default().to_owned(),
+        };
+        let canonical = path.split('/').map(clankr_gateway::aws::encode_segment).collect::<Vec<_>>().join("/");
+        Ok((url, host, canonical))
+    }
+
+    async fn request(&self, http: &reqwest::Client, method: &str, key: &str, query: &str, body: Vec<u8>) -> Result<reqwest::Response> {
+        let (mut url, host, path) = self.target(key)?;
+        if !query.is_empty() {
+            url.set_query(Some(query));
+        }
+        let req = clankr_gateway::aws::Request { method, host: &host, path: &path, query, headers: vec![], body: &body };
+        let signed = clankr_gateway::aws::sign(&req, &self.creds, &self.region, "s3", &clankr_gateway::aws::now());
+        let mut rb = http.request(method.parse().expect("method"), url).body(body);
+        for (k, v) in signed {
+            rb = rb.header(k, v);
+        }
+        let r = rb.send().await.context("s3 request")?;
+        anyhow::ensure!(r.status().is_success(), "s3 answered {}", r.status());
+        Ok(r)
+    }
+
+    fn key(&self, first: i64, last: i64) -> String {
+        let name = format!("audit-{first:012}-{last:012}.jsonl");
+        if self.prefix.is_empty() { name } else { format!("{}/{name}", self.prefix) }
+    }
+}
+
+/// Every object under an `s3://` destination, in order, concatenated: the export as one text.
+pub async fn read_s3(http: &reqwest::Client, dest: &str) -> Result<String> {
+    let s3 = S3::parse(dest)?;
+    let prefix = if s3.prefix.is_empty() { String::new() } else { format!("{}/", s3.prefix) };
+    let mut keys = vec![];
+    let mut token: Option<String> = None;
+    loop {
+        let mut q = format!("list-type=2&prefix={}", clankr_gateway::aws::encode_segment(&prefix));
+        if let Some(t) = &token {
+            q = format!("continuation-token={}&{q}", clankr_gateway::aws::encode_segment(t));
+        }
+        let xml = s3.request(http, "GET", "", &q, vec![]).await?.text().await?;
+        keys.extend(tags(&xml, "Key"));
+        token = tags(&xml, "NextContinuationToken").pop().filter(|_| xml.contains("<IsTruncated>true</IsTruncated>"));
+        if token.is_none() {
+            break;
+        }
+    }
+    keys.sort();
+    let mut out = String::new();
+    for k in keys {
+        out.push_str(&s3.request(http, "GET", &k, "", vec![]).await?.text().await?);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
+
+/// The text of every `<tag>…</tag>` in a small XML document (S3 listings carry no attributes
+/// or nesting on these elements).
+fn tags(xml: &str, tag: &str) -> Vec<String> {
+    let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
+    xml.split(&open).skip(1).filter_map(|rest| rest.split(&close).next()).map(|s| s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")).collect()
+}
+
+async fn deliver(http: &reqwest::Client, dest: &str, body: &str, first: i64, last: i64) -> Result<()> {
+    if dest.starts_with("s3://") {
+        let s3 = S3::parse(dest)?;
+        s3.request(http, "PUT", &s3.key(first, last), "", body.as_bytes().to_vec()).await?;
+        return Ok(());
+    }
     if let Some(path) = dest.strip_prefix("file://") {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).with_context(|| format!("open {path}"))?;
@@ -78,7 +187,7 @@ async fn deliver(http: &reqwest::Client, dest: &str, body: &str) -> Result<()> {
         return Ok(());
     }
     if !(dest.starts_with("https://") || dest.starts_with("http://127.0.0.1") || dest.starts_with("http://localhost")) {
-        bail!("audit export destination must be file://, https://, or http:// to loopback");
+        bail!("audit export destination must be file://, s3://, https://, or http:// to loopback");
     }
     let mut rb = http.post(dest).header("content-type", "application/x-ndjson").body(body.to_owned());
     if let Ok(t) = std::env::var("CLANKR_AUDIT_EXPORT_TOKEN") {

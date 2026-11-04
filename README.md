@@ -127,14 +127,17 @@ Getting one agent working in a notebook is easy. Running many of them for real r
 - **Request/reply** with timeouts: a request nobody picked up in time expires unprocessed, and a late reply never comes back to haunt a caller.
 - **Topics** with durable subscriptions, so a subscriber that was down catches up.
 - SDK handlers receive messages for you. There's no polling loop to write.
+- **Chat connectors:** Telegram and Slack bots that hand messages to a service and post approvals as cards with buttons. No public URL needed.
+- **Webhooks:** signed deliveries from GitHub, Stripe or anything else become events on a topic.
+- **A2A:** every service has an agent card and answers `SendMessage`; a tool executor calls A2A agents elsewhere.
 
 </td>
 <td width="50%" valign="top">
 
 ### Gateway
 - Agents never hold credentials. They name a claim, and the gateway brokers the real key.
-- OpenAI-compatible and Anthropic adapters, with budgets and attribution.
-- Tools: HTTP endpoints, sandboxed containers, MCP servers. Each has grants, input schemas, idempotent replay and optional approval.
+- OpenAI-compatible, Anthropic, Azure OpenAI, Gemini, Vertex AI and Amazon Bedrock adapters, with budgets and attribution. Embeddings go through the same claims.
+- Tools: HTTP endpoints, sandboxed containers, MCP servers, chat connectors, A2A agents. Each has grants, input schemas, idempotent replay and optional approval.
 
 ### Fleet
 - Nodes join with a token and mutual TLS. The scheduler places agents on them.
@@ -145,7 +148,8 @@ Getting one agent working in a notebook is easy. Running many of them for real r
 ### Governance
 - Role-based access control, ServiceAccount tokens, and OIDC sign-in.
 - Quotas, budgets and alerts per namespace.
-- A hash-chained audit log, shipped off-site and checked against the database on demand.
+- A hash-chained audit log, shipped off-site (a file, an HTTP receiver, or S3 with Object Lock) and checked against the database on demand.
+- `/metrics` for Prometheus, and traces with the OpenTelemetry GenAI attributes.
 - Secrets are envelope-encrypted, and can use HashiCorp Vault as the key manager.
 
 </td>

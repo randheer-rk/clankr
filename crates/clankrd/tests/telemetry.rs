@@ -59,7 +59,7 @@ async fn spans_continue_the_callers_trace_and_carry_run_context() {
         .get_finished_spans()
         .unwrap()
         .into_iter()
-        .filter(|s| s.name.starts_with("POST ") || s.name.starts_with("engine.") || s.name.starts_with("model.") || s.name.starts_with("task."))
+        .filter(|s| s.name.starts_with("POST ") || s.name.starts_with("engine.") || s.name.starts_with("chat ") || s.name.starts_with("task."))
         .collect();
     let names: Vec<&str> = spans.iter().map(|s| s.name.as_ref()).collect();
     assert!(spans.iter().all(|s| s.span_context.trace_id().to_string() == TRACE), "every span joins the caller's trace: {names:?}");
@@ -74,10 +74,16 @@ async fn spans_continue_the_callers_trace_and_carry_run_context() {
     assert!(attr(step, "run_id").is_some_and(|r| r.len() == 36));
     assert_eq!(step.parent_span_id, http.span_context.span_id(), "engine step is a child of its request");
 
-    let model = spans.iter().find(|s| s.name == "model.generate").expect("model.generate span");
+    // the model span follows the OpenTelemetry GenAI conventions: `chat {model}` with gen_ai.* attributes
+    let model = spans.iter().find(|s| s.name == "chat m").expect("chat span named by model");
     assert_eq!(attr(model, "provider").as_deref(), Some("mock"));
     assert_eq!(attr(model, "outcome").as_deref(), Some("ok"));
     assert!(attr(model, "output_tokens").is_some_and(|t| t.parse::<i64>().unwrap() > 0));
+    assert_eq!(attr(model, "gen_ai.operation.name").as_deref(), Some("chat"));
+    assert_eq!(attr(model, "gen_ai.provider.name").as_deref(), Some("mock"));
+    assert_eq!(attr(model, "gen_ai.request.model").as_deref(), Some("m"));
+    assert_eq!(attr(model, "gen_ai.response.finish_reasons").as_deref(), Some("end_turn"));
+    assert_eq!(attr(model, "gen_ai.usage.input_tokens"), attr(model, "input_tokens"));
     // prompts never land in span attributes (CL-34-05)
     assert!(!spans.iter().flat_map(|s| s.attributes.iter()).any(|kv| kv.value.to_string().contains("hi")));
 }
