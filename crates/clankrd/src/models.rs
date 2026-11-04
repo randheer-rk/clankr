@@ -4,6 +4,7 @@
 //!   GET    /v1/namespaces/{ns}/secrets[/{name}]                      -> metadata
 //!   DELETE /v1/namespaces/{ns}/secrets/{name}
 //!   POST   /v1/namespaces/{ns}/models/{claim}/generate                -> text, usage, provenance
+//!   POST   /v1/namespaces/{ns}/models/{claim}/embed                   -> vectors, usage, provenance
 
 use std::collections::BTreeMap;
 
@@ -11,7 +12,7 @@ use axum::extract::{Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use clankr_gateway::{GenerateRequest, GenerateResponse};
+use clankr_gateway::{EmbedRequest, EmbedResponse, GenerateRequest, GenerateResponse};
 use clankr_store::secrets::SecretMeta;
 use clankr_types::RequestCtx;
 use serde::Deserialize;
@@ -25,6 +26,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/namespaces/{ns}/secrets", get(list))
         .route("/v1/namespaces/{ns}/secrets/{name}", get(meta).put(put).delete(remove))
         .route("/v1/namespaces/{ns}/models/{claim}/generate", post(generate))
+        .route("/v1/namespaces/{ns}/models/{claim}/embed", post(embed))
         .route("/v1/namespaces/{ns}/toolclaims/{claim}/call", post(call_tool))
         .route("/v1/namespaces/{ns}/toolcalls/{id}/complete", post(complete_tool))
 }
@@ -61,6 +63,18 @@ async fn generate(
     let claims = crate::workload(&s, &ctx, &headers, &ns, None).await?;
     let ctx = RequestCtx { actor: writer(&ctx, &headers, claims.as_ref()), ..ctx };
     Ok(Json(s.gateway.generate(&ctx, &ns, &claim, req).await?))
+}
+
+async fn embed(
+    State(s): State<AppState>,
+    Extension(ctx): Extension<RequestCtx>,
+    headers: HeaderMap,
+    Path((ns, claim)): Path<(String, String)>,
+    Json(req): Json<EmbedRequest>,
+) -> ApiResult<Json<EmbedResponse>> {
+    let claims = crate::workload(&s, &ctx, &headers, &ns, None).await?;
+    let ctx = RequestCtx { actor: writer(&ctx, &headers, claims.as_ref()), ..ctx };
+    Ok(Json(s.gateway.embed(&ctx, &ns, &claim, req).await?))
 }
 
 async fn call_tool(

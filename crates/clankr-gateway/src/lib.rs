@@ -11,6 +11,7 @@ use clankr_types::{ApiError, ErrorCode, RequestCtx};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod aws;
 pub mod chat;
 mod providers;
 pub mod sandbox;
@@ -21,6 +22,14 @@ pub mod tools;
 pub enum Provider {
     OpenaiCompatible,
     Anthropic,
+    /// Azure OpenAI: `endpoint` is the resource URL, the model is the deployment name.
+    AzureOpenai,
+    /// The Gemini API with an API key.
+    Gemini,
+    /// Vertex AI: `project` and `region`, a service-account JSON as the secret.
+    Vertex,
+    /// Amazon Bedrock (Converse API): `region`, `KEY_ID:SECRET[:SESSION]` as the secret.
+    Bedrock,
     /// Deterministic, offline; for tests and `clank dev`.
     Mock,
     /// Answers from `script` only (golden traces); an unscripted prompt is an error, so
@@ -60,6 +69,12 @@ pub struct ProviderConnectionSpec {
     pub provider: Provider,
     #[serde(default)]
     pub endpoint: String,
+    /// Bedrock and Vertex: the AWS region / Google Cloud location.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub region: String,
+    /// Vertex: the Google Cloud project.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub project: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_ref: Option<SecretRef>,
     pub allowed_models: Vec<String>,
@@ -190,6 +205,27 @@ pub struct GenerateResponse {
     pub connection: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedRequest {
+    pub inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedResponse {
+    /// One vector per input, in order.
+    pub embeddings: Vec<Vec<f32>>,
+    pub usage: Usage,
+    pub provider: Provider,
+    pub model: String,
+    pub connection: String,
+}
+
 fn invalid(field: &str, msg: impl Into<String>) -> ApiError {
     ApiError::new(ErrorCode::InvalidSpec, msg).field(field)
 }
@@ -213,10 +249,20 @@ pub fn admit_connection(spec: &serde_json::Value) -> Result<ProviderConnectionSp
         }
     }
     if !matches!(s.provider, Provider::Mock | Provider::Replay) {
-        check_endpoint(&s.endpoint)?;
+        // Bedrock and Vertex derive their endpoint from the region; the rest need one
+        let derived = matches!(s.provider, Provider::Bedrock | Provider::Vertex) && s.endpoint.is_empty();
+        if !derived {
+            check_endpoint(&s.endpoint)?;
+        }
         if s.secret_ref.is_none() {
             return Err(invalid("spec.secretRef", "provider needs a secretRef {name, key}"));
         }
+    }
+    match s.provider {
+        Provider::Bedrock if s.region.is_empty() => return Err(invalid("spec.region", "bedrock needs the AWS region")),
+        Provider::Vertex if s.region.is_empty() || s.project.is_empty() => return Err(invalid("spec.project", "vertex needs project and region")),
+        Provider::AzureOpenai if s.endpoint.is_empty() => return Err(invalid("spec.endpoint", "azure-openai needs the resource endpoint, https://<resource>.openai.azure.com")),
+        _ => {}
     }
     Ok(s)
 }
@@ -262,6 +308,8 @@ pub struct Gateway {
     master: MasterKey,
     http: reqwest::Client,
     sandbox: Option<sandbox::Sandbox>,
+    /// Vertex access tokens per connection (`ns/name`), with their expiry.
+    oauth: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, (String, Instant)>>>,
 }
 
 impl Gateway {
@@ -271,7 +319,7 @@ impl Gateway {
             .timeout(Duration::from_secs(300))
             .build()
             .expect("http client");
-        Self { store, master, http, sandbox: None }
+        Self { store, master, http, sandbox: None, oauth: Default::default() }
     }
 
     /// Enables `sandbox` and `mcpStdio` tools, run as kennel containers on this host.
@@ -318,10 +366,7 @@ impl Gateway {
         let cost_reservation = price.map_or(0, |p| p.micro_usd(est_in, i64::from(max_out)));
         self.reserve(&buckets, ns, reservation, cost_reservation).await?;
 
-        let api_key = match &conn.secret_ref {
-            Some(r) => Some(self.store.secret_read(ctx, &self.master, ns, &r.name, &r.key, &format!("model gateway: ModelClaim {claim_name}")).await?),
-            None => None,
-        };
+        let api_key = self.credential(ctx, ns, &claim.provider_connection, &conn, &format!("model gateway: ModelClaim {claim_name}")).await?;
         let started = Instant::now();
         let result = providers::call(&self.http, &conn, &claim.model, api_key.as_deref(), &req, max_out).await;
         let latency = started.elapsed().as_millis() as i64;
@@ -386,6 +431,93 @@ impl Gateway {
         }
         let (text, stop_reason, usage) = result.map(|r| (r.text, r.stop_reason, r.usage))?;
         Ok(GenerateResponse { text, stop_reason, usage, provider: conn.provider, model: claim.model, connection: claim.provider_connection })
+    }
+
+    /// The credential a call carries: the secret's value, or for Vertex an access token minted
+    /// from the service account in the secret (cached until it nears expiry).
+    async fn credential(&self, ctx: &RequestCtx, ns: &str, conn_name: &str, conn: &ProviderConnectionSpec, purpose: &str) -> Result<Option<String>, ApiError> {
+        let Some(r) = &conn.secret_ref else { return Ok(None) };
+        if conn.provider != Provider::Vertex {
+            return Ok(Some(self.store.secret_read(ctx, &self.master, ns, &r.name, &r.key, purpose).await?));
+        }
+        let key = format!("{ns}/{conn_name}");
+        let mut cache = self.oauth.lock().await;
+        if let Some((t, until)) = cache.get(&key)
+            && Instant::now() < *until
+        {
+            return Ok(Some(t.clone()));
+        }
+        let sa = self.store.secret_read(ctx, &self.master, ns, &r.name, &r.key, purpose).await?;
+        let (token, ttl) = providers::vertex_token(&self.http, &sa).await?;
+        cache.insert(key, (token.clone(), Instant::now() + ttl));
+        Ok(Some(token))
+    }
+
+    /// Embeddings through the same claim, allowlist, budget and record as `generate`.
+    #[tracing::instrument(name = "model.embed", skip(self, ctx, req), fields(
+        run_id = req.run_id.map(|r| r.to_string()), task = req.task.as_deref(), actor = %ctx.actor,
+        provider = tracing::field::Empty, model = tracing::field::Empty, input_tokens = tracing::field::Empty, outcome = tracing::field::Empty,
+        otel.name = tracing::field::Empty, gen_ai.operation.name = "embeddings", gen_ai.provider.name = tracing::field::Empty,
+        gen_ai.request.model = tracing::field::Empty, gen_ai.usage.input_tokens = tracing::field::Empty,
+    ))]
+    pub async fn embed(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
+        if req.inputs.is_empty() || req.inputs.len() > 256 {
+            return Err(invalid("inputs", "1..256 texts"));
+        }
+        let claim = admit_claim(&self.store.get(ns, "ModelClaim", claim_name).await?.spec)?;
+        let conn = admit_connection(&self.store.get(ns, "ProviderConnection", &claim.provider_connection).await?.spec)?;
+        if !conn.allowed_models.contains(&claim.model) {
+            return Err(ApiError::new(ErrorCode::Forbidden, format!("model {} is not in allowedModels of ProviderConnection {}", claim.model, claim.provider_connection)));
+        }
+        let est_in: i64 = req.inputs.iter().map(|s| (s.len() as i64 / 4).max(1)).sum();
+        let buckets = self.buckets(ns, claim_name, &claim.budget, req.run_id).await?;
+        let price = conn.pricing.get(&claim.model).copied();
+        if price.is_none() && buckets.iter().any(|b| b.cost) {
+            return Err(ApiError::new(ErrorCode::Forbidden, format!("a cost budget applies but ProviderConnection {} has no pricing for {}", claim.provider_connection, claim.model)));
+        }
+        let cost_reservation = price.map_or(0, |p| p.micro_usd(est_in, 0));
+        self.reserve(&buckets, ns, est_in, cost_reservation).await?;
+        let key = self.credential(ctx, ns, &claim.provider_connection, &conn, &format!("model gateway: ModelClaim {claim_name} (embeddings)")).await?;
+        let started = Instant::now();
+        let result = providers::embed(&self.http, &conn, &claim.model, key.as_deref(), &req.inputs).await;
+        let latency = started.elapsed().as_millis() as i64;
+        let provider_name = serde_json::to_value(conn.provider).unwrap().as_str().unwrap_or_default().to_owned();
+        let span = tracing::Span::current();
+        span.record("provider", provider_name.as_str());
+        span.record("model", claim.model.as_str());
+        span.record("otel.name", format!("embeddings {}", claim.model).as_str());
+        span.record("gen_ai.provider.name", provider_name.as_str());
+        span.record("gen_ai.request.model", claim.model.as_str());
+        let (used, outcome) = match &result {
+            Ok(e) => (e.input_tokens, "ok".to_owned()),
+            Err(e) => (0, format!("error:{:?}", e.code)),
+        };
+        span.record("input_tokens", used);
+        span.record("gen_ai.usage.input_tokens", used);
+        span.record("outcome", outcome.as_str());
+        let cost = price.map(|p| p.micro_usd(used, 0));
+        self.settle(&buckets, ns, (est_in, used), (cost_reservation, cost.unwrap_or(0))).await?;
+        sqlx::query(
+            "insert into model_calls (namespace, claim, connection, provider, model, run_id, task, actor, input_tokens, output_tokens, latency_ms, outcome, stop_reason, cost_micro_usd)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, $11, 'embeddings', $12)",
+        )
+        .bind(ns)
+        .bind(claim_name)
+        .bind(&claim.provider_connection)
+        .bind(&provider_name)
+        .bind(&claim.model)
+        .bind(req.run_id)
+        .bind(&req.task)
+        .bind(&ctx.actor)
+        .bind(used)
+        .bind(latency)
+        .bind(&outcome)
+        .bind(cost)
+        .execute(self.store.pool())
+        .await
+        .map_err(clankr_store::db)?;
+        let e = result?;
+        Ok(EmbedResponse { embeddings: e.vectors, usage: Usage { input_tokens: e.input_tokens, output_tokens: 0 }, provider: conn.provider, model: claim.model, connection: claim.provider_connection })
     }
 
     /// Every counter this call must fit: the claim's own limits and each AgentBudget in the

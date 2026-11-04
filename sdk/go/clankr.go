@@ -193,6 +193,22 @@ func (c *Client) Generate(ctx context.Context, claim string, messages []Message,
 	return &g, c.call(ctx, frame{"op": "generate", "claim": claim, "request": req}, &g)
 }
 
+// Embedded is what Embed returns: one vector per input, in order.
+type Embedded struct {
+	Embeddings [][]float32 `json:"embeddings"`
+	Usage      struct {
+		InputTokens int64 `json:"inputTokens"`
+	} `json:"usage"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// Embed turns texts into vectors through a ModelClaim, under the same budget as Generate.
+func (c *Client) Embed(ctx context.Context, claim string, inputs []string) (*Embedded, error) {
+	var e Embedded
+	return &e, c.call(ctx, frame{"op": "embed", "claim": claim, "request": frame{"inputs": inputs}}, &e)
+}
+
 type ContextObject struct {
 	Key       string          `json:"key"`
 	Version   int64           `json:"version"`

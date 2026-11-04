@@ -300,6 +300,10 @@ impl Client {
         self.call(Method::POST, &format!("/models/{claim}/generate"), Some(request), Some(who)).await
     }
 
+    pub async fn embed(&self, claim: &str, request: &Value, who: &str) -> Result<Value, ApiError> {
+        self.call(Method::POST, &format!("/models/{claim}/embed"), Some(request), Some(who)).await
+    }
+
     pub async fn context_get(&self, claim: &str, key: &str, who: &str) -> Result<Value, ApiError> {
         self.call(Method::GET, &format!("/contexts/{claim}/keys/{}", encode_key(key)), None, Some(who)).await
     }

@@ -35,6 +35,7 @@ export interface Task {
 }
 
 export interface Generated { text: string; stopReason: string; usage: { inputTokens: number; outputTokens: number }; provider: string; model: string }
+export interface Embedded { embeddings: number[][]; usage: { inputTokens: number }; provider: string; model: string }
 export interface ContextObject { key: string; version: number; value: any; writer: string; updatedAt: string }
 export interface ToolResult { output: any; outputSha256: string; truncated: boolean; durationMs: number; toolVersion: string; replayed: boolean }
 
@@ -173,7 +174,10 @@ export class Context {
   readonly namespace: string
   readonly agent: string
   readonly instance: string
-  readonly models: { generate(claim: string, messages: { role: string; content: string }[], opts?: { system?: string; maxOutputTokens?: number }): Promise<Generated> }
+  readonly models: {
+    generate(claim: string, messages: { role: string; content: string }[], opts?: { system?: string; maxOutputTokens?: number }): Promise<Generated>
+    embed(claim: string, inputs: string[]): Promise<Embedded>
+  }
   readonly tools: { call(claim: string, tool: string, method: string, input?: Json, opts?: { idempotencyKey?: string; approval?: string }): Promise<ToolResult> }
   /**
    * AgentServices by name (`clankr://agents/<namespace>/<name>`), listed in the agent's
@@ -193,6 +197,7 @@ export class Context {
     this.instance = welcome.instance
     this.models = {
       generate: (claim, messages, opts = {}) => calls.call({ op: "generate", claim, request: { messages, system: opts.system, maxOutputTokens: opts.maxOutputTokens } }),
+      embed: (claim, inputs) => calls.call({ op: "embed", claim, request: { inputs } }),
     }
     this.tools = {
       call: (claim, tool, method, input = {}, opts = {}) => {

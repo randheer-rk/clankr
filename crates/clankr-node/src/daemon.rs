@@ -497,6 +497,16 @@ async fn broker(client: &Client, spec: &AgentSpec, who: &str, task: Option<&Leas
             }
             client.generate(&claim, &request, who).await
         }
+        CallOp::Embed { claim, mut request } => {
+            if !spec.models.contains(&claim) {
+                return Err(deny("ModelClaim", &claim));
+            }
+            if let (Some(l), Some(obj)) = (task, request.as_object_mut()) {
+                obj.insert("runId".into(), l.run_id.clone().into());
+                obj.insert("task".into(), l.task.clone().into());
+            }
+            client.embed(&claim, &request, who).await
+        }
         CallOp::ToolCall { claim, mut call } => {
             if !spec.tools.contains(&claim) {
                 return Err(deny("ToolClaim", &claim));

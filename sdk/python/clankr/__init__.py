@@ -118,6 +118,10 @@ class _Models:
             req["maxOutputTokens"] = max_output_tokens
         return await self._calls.call({"op": "generate", "claim": claim, "request": req})
 
+    async def embed(self, claim: str, inputs: list) -> dict:
+        """Returns {"embeddings": [[float, ...], ...], "usage": {"inputTokens"}, "provider", "model"}."""
+        return await self._calls.call({"op": "embed", "claim": claim, "request": {"inputs": list(inputs)}})
+
 
 # the task a coroutine is working on, so ctx.tools can derive stable idempotency keys
 _current: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("clankr_task", default=None)

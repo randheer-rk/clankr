@@ -36,6 +36,8 @@ pub enum AgentFrame {
 pub enum CallOp {
     /// Body is the gateway's GenerateRequest (messages, system, maxOutputTokens).
     Generate { claim: String, request: Value },
+    /// Body is the gateway's EmbedRequest (inputs).
+    Embed { claim: String, request: Value },
     /// A tool call through a ToolClaim; body is `{tool, method, input, idempotencyKey, approval?}`.
     ToolCall { claim: String, call: Value },
     ContextGet { claim: String, key: String },

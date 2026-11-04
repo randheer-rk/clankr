@@ -20,7 +20,7 @@ tracing = "0.1.44"
 chrono = "0.4"
 sha2 = "0.11"
 hex = "0.4"
-jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 hmac = "0.13"
 
 [dev-dependencies]
