@@ -30,23 +30,23 @@ export function AskFirst() {
               background: "linear-gradient(160deg, rgba(255,255,255,.12), rgba(255,255,255,.03) 55%, rgba(190,160,255,.05))", boxShadow: "0 80px 140px -50px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.28)" }}>
               <Sweep at={70} dur={60} strength={0.16} />
               <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 22, color: "rgba(245,243,239,.6)" }}>
-                <span style={{ width: 44, height: 44, borderRadius: 14, display: "grid", placeItems: "center", background: "rgba(255,122,61,.16)", color: "#ffb37a", fontWeight: 700 }}>W</span>
-                Your writer would like to
+                <span style={{ width: 44, height: 44, borderRadius: 14, display: "grid", placeItems: "center", background: "rgba(255,122,61,.16)", color: "#ffb37a", fontWeight: 700 }}>T</span>
+                Tool call · publish.post
                 <span style={{ marginLeft: "auto", fontFamily: "'JetBrains Mono', monospace", fontSize: 18, opacity: 1 - Math.min(1, stamp * 2) }}>09:44</span>
               </div>
-              <div style={{ fontSize: 46, fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1.1, marginTop: 22 }}>Send the spring newsletter<br />to 2,340 people</div>
-              <div style={{ marginTop: 18, fontSize: 22, color: "rgba(245,243,239,.55)", lineHeight: 1.45 }}>“Spring is here, and so is 20% off everything blue…” · reviewed by your editor</div>
+              <div style={{ fontSize: 46, fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1.1, marginTop: 22 }}>Publish “Spring update”<br />to the company blog</div>
+              <div style={{ marginTop: 18, fontSize: 22, color: "rgba(245,243,239,.55)", lineHeight: 1.45 }}>1,840 words · reviewed by blog/reviewer · 1 fix applied</div>
               <div style={{ display: "flex", gap: 14, marginTop: 34 }}>
                 <div style={{ position: "relative", flex: 1, height: 72, borderRadius: 22, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", gap: 14, fontSize: 25, fontWeight: 600,
                   background: done ? "#2f8f5b" : "#f5f3ef", color: done ? "#f5f3ef" : "#111", transform: `scale(${pressed ? 0.97 : 1})`, transition: "none" }}>
                   {!done && <div style={{ position: "absolute", inset: 0, width: `${hold * 100}%`, background: "linear-gradient(90deg, #ffd3b5, #ffb37a)" }} />}
-                  <span style={{ position: "relative" }}>{done ? "✓  Sent" : pressed ? "Keep holding…" : "Hold to allow"}</span>
+                  <span style={{ position: "relative" }}>{done ? "✓  Approved" : pressed ? "Keep holding…" : "Hold to approve"}</span>
                 </div>
                 <div style={{ width: 170, height: 72, borderRadius: 22, display: "grid", placeItems: "center", fontSize: 25, fontWeight: 600, border: "1.5px solid rgba(255,255,255,.22)", color: "rgba(245,243,239,.75)", opacity: done ? 0.3 : 1 }}>Not now</div>
               </div>
               {/* the stamp: who allowed it, and when */}
               <div style={{ position: "absolute", right: 30, top: 30, padding: "8px 16px", borderRadius: 14, border: "3px solid #8fe0ad", color: "#8fe0ad", fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 600, letterSpacing: ".08em",
-                opacity: Math.min(1, stamp * 1.4), transform: `rotate(-4deg) scale(${2.2 - stamp * 1.2})` }}>ALLOWED BY YOU · 09:46</div>
+                opacity: Math.min(1, stamp * 1.4), transform: `rotate(-4deg) scale(${2.2 - stamp * 1.2})` }}>APPROVED · ops@ · 09:46</div>
             </div>
           </div>
           {/* the press, seen as a soft ring of light where a finger would be */}
@@ -61,19 +61,19 @@ export function AskFirst() {
           background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.12)", opacity: entry * (1 - t(f, 326, 340)), transform: `translateY(${(1 - entry) * 24}px)` }}>
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 21, color: "rgba(245,243,239,.45)" }}>09:46</span>
           <span style={{ width: 11, height: 11, borderRadius: 6, background: "#8fe0ad", boxShadow: "0 0 14px #8fe0ad" }} />
-          <span style={{ fontSize: 28 }}>You said yes. Newsletter sent.</span>
+          <span style={{ fontSize: 26, fontFamily: "'JetBrains Mono', monospace" }}>approval.granted  ops@  "LGTM"  → audit #14,212</span>
         </div>
 
         <div style={{ position: "absolute", left: 0, right: 0, top: 70 }}>
-          <Words text="Some things need a yes." at={8} size={52} out={110} style={{ color: "rgba(245,243,239,.9)" }} />
+          <Words text="Some tools need a yes." at={8} size={52} out={110} />
         </div>
         <div style={{ position: "absolute", left: 0, right: 0, top: 70 }}>
-          <Words text="Yours." at={190} size={52} out={262} style={{ color: "rgba(245,243,239,.9)" }} />
+          <Words text="From a person." at={190} size={52} out={262} />
         </div>
         <div style={{ position: "absolute", left: 0, right: 0, top: 660 }}>
-          <Words text="You decide what goes out." at={300} size={86} />
+          <Words text="Gated." at={300} size={110} head />
         </div>
-        <Lower text="It asks. It waits. It writes down your answer." at={318} style={{ top: 774 }} />
+        <Lower text="Approval-gated tools wait in an inbox. The answer lands in the audit log." at={318} style={{ top: 774 }} />
       </AbsoluteFill>
     </Stage>
   )

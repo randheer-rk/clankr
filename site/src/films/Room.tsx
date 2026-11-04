@@ -75,15 +75,15 @@ export function Room() {
         </div>
 
         <div style={{ position: "absolute", left: 0, right: 0, top: 676 }}>
-          <Words text="It can do the work." at={128} size={60} out={190} />
+          <Words text="It runs code you didn't write." at={128} size={56} out={190} />
         </div>
         <div style={{ position: "absolute", left: 0, right: 0, top: 676 }}>
-          <Words text="It can't wander off." at={206} size={60} out={286} />
+          <Words text="It reaches nothing you didn't grant." at={206} size={56} out={286} />
         </div>
         <div style={{ position: "absolute", left: 0, right: 0, top: 640 }}>
-          <Words text="Its own room." at={300} size={100} />
+          <Words text="Sandboxed." at={300} size={110} head />
         </div>
-        <Lower text="Every helper works behind its own walls." at={318} style={{ top: 774 }} />
+        <Lower text="Rootless container, gVisor, or a Firecracker microVM. Chosen per agent." at={318} style={{ top: 774 }} />
       </AbsoluteFill>
     </Stage>
   )

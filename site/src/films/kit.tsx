@@ -17,7 +17,7 @@ export function Stage({ children, glow = "#3a2a1e", x = 50, y = 42 }: { children
   const f = useCurrentFrame()
   const breathe = 1 + Math.sin(f / 40) * 0.04
   return (
-    <AbsoluteFill style={{ background: "#060608", overflow: "hidden", fontFamily: "'Instrument Sans', system-ui, sans-serif", color: "#f5f3ef" }}>
+    <AbsoluteFill style={{ background: "#121310", overflow: "hidden", fontFamily: "'Instrument Sans', system-ui, sans-serif", color: "#efe9dc" }}>
       <AbsoluteFill style={{ background: `radial-gradient(${46 * breathe}% ${58 * breathe}% at ${x}% ${y}%, ${glow}, transparent 70%)` }} />
       {children}
       <AbsoluteFill style={{ background: "radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(0,0,0,.7))", pointerEvents: "none" }} />
@@ -27,11 +27,11 @@ export function Stage({ children, glow = "#3a2a1e", x = 50, y = 42 }: { children
 }
 
 /** Words that rise out of a blur, one after another, the way launch films set type. */
-export function Words({ text, at, every = 3, size = 84, weight = 600, style, out }: { text: string; at: number; every?: number; size?: number; weight?: number; style?: CSSProperties; out?: number }) {
+export function Words({ text, at, every = 3, size = 84, weight = 600, style, out, head = false }: { text: string; at: number; every?: number; size?: number; weight?: number; style?: CSSProperties; out?: number; head?: boolean }) {
   const f = useCurrentFrame()
   const gone = out === undefined ? 0 : t(f, out, out + 18)
   return (
-    <div style={{ fontSize: size, fontWeight: weight, letterSpacing: "-0.035em", lineHeight: 1.04, textAlign: "center", opacity: 1 - gone, filter: `blur(${gone * 12}px)`, ...style }}>
+    <div style={{ fontSize: size, fontWeight: head ? 900 : weight, fontFamily: head ? "'Archivo', sans-serif" : undefined, textTransform: head ? "uppercase" : undefined, letterSpacing: head ? "-0.04em" : "-0.035em", lineHeight: 1.0, textAlign: "center", opacity: 1 - gone, filter: `blur(${gone * 12}px)`, ...style }}>
       {text.split(" ").map((w, i) => {
         const k = t(f, at + i * every, at + i * every + 22)
         return (
@@ -67,5 +67,5 @@ export function Orb({ size = 120, x = 0, y = 0, heat = 1 }: { size?: number; x?:
 export function Lower({ text, at, out, style }: { text: string; at: number; out?: number; style?: CSSProperties }) {
   const f = useCurrentFrame()
   const k = t(f, at, at + 24) * (out === undefined ? 1 : 1 - t(f, out, out + 18))
-  return <div style={{ position: "absolute", left: 0, right: 0, textAlign: "center", fontSize: 26, color: "rgba(245,243,239,.62)", letterSpacing: "0.01em", opacity: k, transform: `translateY(${(1 - k) * 10}px)`, ...style }}>{text}</div>
+  return <div style={{ position: "absolute", left: 0, right: 0, textAlign: "center", fontSize: 26, color: "rgba(239,233,220,.62)", letterSpacing: "0.01em", opacity: k, transform: `translateY(${(1 - k) * 10}px)`, ...style }}>{text}</div>
 }

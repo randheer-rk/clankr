@@ -5,15 +5,15 @@ export const LOGBOOK_FRAMES = 400
 
 // a morning in a small shop, as the helper wrote it down
 const ROWS: { at: number; time: string; text: string; tone?: "bad" | "good" | "hot" }[] = [
-  { at: 40, time: "09:30", text: "Read this morning's orders" },
-  { at: 62, time: "09:31", text: "Wrote a thank-you note to Ana" },
-  { at: 84, time: "09:33", text: "Checked stock for the blue mug" },
-  { at: 106, time: "09:35", text: "Drafted the spring newsletter" },
-  { at: 128, time: "09:36", text: "Asked the editor for a second look" },
-  { at: 204, time: "09:41", text: "The server restarted", tone: "bad" },
-  { at: 236, time: "09:41", text: "Picked up right where it stopped", tone: "good" },
-  { at: 262, time: "09:42", text: "Editor: “Reads well. One typo, fixed.”" },
-  { at: 288, time: "09:44", text: "Waiting for your OK to send", tone: "hot" },
+  { at: 40, time: "00:00.0", text: "run.started  publish-weekly-8d1" },
+  { at: 62, time: "00:00.1", text: "instance.placed  writer → eu-1" },
+  { at: 84, time: "00:00.3", text: "model.call.settled  3,412 tokens" },
+  { at: 106, time: "00:09.1", text: "message.sent  → blog/reviewer" },
+  { at: 128, time: "00:09.4", text: "step.started  draft · event #14" },
+  { at: 204, time: "00:31.5", text: "node.lost  eu-1 · epoch 41", tone: "bad" },
+  { at: 236, time: "00:33.9", text: "step.resumed  draft ← #14", tone: "good" },
+  { at: 262, time: "00:34.0", text: "reviewer: approved, one fix" },
+  { at: 288, time: "00:34.0", text: "approval.requested  publish.post", tone: "hot" },
 ]
 const ROW_H = 84
 
@@ -27,7 +27,7 @@ function Row({ r, f }: { r: (typeof ROWS)[number]; f: number }) {
       background: `linear-gradient(90deg, rgba(255,255,255,${0.05 * glow}), transparent 70%)` }}>
       <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 22, color: "rgba(245,243,239,.45)", width: 90 }}>{r.time}</span>
       <span style={{ width: 12, height: 12, borderRadius: 6, background: color, boxShadow: `0 0 ${10 + glow * 24}px ${color}` }} />
-      <span style={{ fontSize: 33, fontWeight: 500, letterSpacing: "-0.01em", color, clipPath: `inset(0 ${100 - write}% 0 0)` }}>{r.text}</span>
+      <span style={{ fontSize: 28, fontWeight: 500, fontFamily: "'JetBrains Mono', monospace", letterSpacing: "-0.01em", color, clipPath: `inset(0 ${100 - write}% 0 0)` }}>{r.text}</span>
     </div>
   )
 }
@@ -54,8 +54,8 @@ export function Logbook() {
           }}>
             <div style={{ borderRadius: 34, overflow: "hidden", border: "1.5px solid rgba(255,255,255,.18)", background: "linear-gradient(170deg, rgba(255,255,255,.09), rgba(255,255,255,.02) 60%)", boxShadow: "0 60px 120px -40px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.2)" }}>
               <div style={{ padding: "30px 46px", display: "flex", justifyContent: "space-between", fontFamily: "'JetBrains Mono', monospace", fontSize: 20, color: "rgba(245,243,239,.5)", letterSpacing: ".06em" }}>
-                <span>LOGBOOK · SPRING NEWSLETTER</span>
-                <span style={{ color: cut ? "#ff8a7a" : "#8fe0ad" }}>● {cut ? "offline" : "recording"}</span>
+                <span>RUN · BLOG/PUBLISH-WEEKLY-8D1</span>
+                <span style={{ color: cut ? "#ff8a7a" : "#8fe0ad" }}>● {cut ? "eu-1 lost" : "eu-1 ok"}</span>
               </div>
               <div style={{ height: ROW_H * 6, overflow: "hidden", position: "relative" }}>
                 <div style={{ transform: `translateY(${-Math.max(0, written - 6) * ROW_H}px)`, transition: "none" }}>
@@ -67,15 +67,15 @@ export function Logbook() {
           </div>
         </AbsoluteFill>
         <div style={{ position: "absolute", left: 0, right: 0, top: 690 }}>
-          <Words text="It writes everything down." at={52} size={58} out={160} />
+          <Words text="Every step is an event." at={52} size={56} out={160} />
         </div>
         <div style={{ position: "absolute", left: 0, right: 0, top: 690 }}>
-          <Words text="Even when the lights go out." at={222} size={58} out={306} />
+          <Words text="The node died. The run didn't." at={222} size={56} out={306} />
         </div>
         <div style={{ position: "absolute", left: 0, right: 0, top: 660 }}>
-          <Words text="A logbook that never forgets." at={322} size={86} />
+          <Words text="Durable." at={322} size={110} head />
         </div>
-        <Lower text="If anything stops, it starts again from the last line. Nothing is done twice." at={340} style={{ top: 776 }} />
+        <Lower text="Resumes from the last committed event. No model or tool is called twice." at={340} style={{ top: 776 }} />
       </AbsoluteFill>
     </Stage>
   )
