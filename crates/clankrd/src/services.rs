@@ -126,22 +126,28 @@ async fn publish(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx
         }
         None => crate::contexts::writer(&ctx, &headers, None),
     };
+    Ok(Json(publish_topic(&s, &ctx, &ns, &topic, &sender, &b.payload, b.dedup_key.as_deref()).await?))
+}
+
+/// Delivers a message to every subscription of `topic` and starts every EventTrigger on it.
+/// The caller has authorized `sender`. Shared by the API, webhooks and connectors.
+pub(crate) async fn publish_topic(s: &AppState, ctx: &RequestCtx, ns: &str, topic: &str, sender: &str, payload: &Value, dedup_key: Option<&str>) -> Result<Value, ApiError> {
     // a copy per subscription, each in its own durable mailbox
-    let (subs, _) = s.store.list("EventSubscription", Some(&ns), &Default::default()).await?;
+    let (subs, _) = s.store.list("EventSubscription", Some(ns), &Default::default()).await?;
     let mut delivered = vec![];
     for sub in subs {
         let Ok(spec) = admit_event_subscription(&sub.spec) else { continue };
         if spec.topic != topic {
             continue;
         }
-        let mb = admit_mailbox(&s.store.get(&ns, "AgentMailbox", &spec.mailbox).await?.spec)?;
-        let opts = SendOpts { sender: &sender, correlation_id: None, dedup_key: b.dedup_key.as_deref(), ttl_secs: mb.retention_seconds, max_deliveries: mb.max_deliveries, reply_to: None };
-        s.store.mailbox_send(&ns, &spec.mailbox, &b.payload, opts).await?;
+        let mb = admit_mailbox(&s.store.get(ns, "AgentMailbox", &spec.mailbox).await?.spec)?;
+        let opts = SendOpts { sender, correlation_id: None, dedup_key, ttl_secs: mb.retention_seconds, max_deliveries: mb.max_deliveries, reply_to: None };
+        s.store.mailbox_send(ns, &spec.mailbox, payload, opts).await?;
         delivered.push(sub.metadata.name);
     }
     // EventTriggers: a run per published message (a republish with the same dedup key starts none)
-    let (triggers, _) = s.store.list("EventTrigger", Some(&ns), &Default::default()).await?;
-    let event_key = b.dedup_key.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+    let (triggers, _) = s.store.list("EventTrigger", Some(ns), &Default::default()).await?;
+    let event_key = dedup_key.map_or_else(|| Uuid::new_v4().to_string(), str::to_owned);
     let mut runs = vec![];
     for t in triggers {
         let Ok(spec) = clankr_types::schedule::admit_event_trigger(&t.spec) else { continue };
@@ -149,11 +155,11 @@ async fn publish(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx
             continue;
         }
         let mut input = if spec.input.is_object() { spec.input.clone() } else { json!({}) };
-        input["event"] = b.payload.clone();
+        input["event"] = payload.clone();
         input["topic"] = json!(topic);
         let tctx = RequestCtx { actor: format!("eventtrigger/{ns}/{} for {sender}", t.metadata.name), request_id: ctx.request_id.clone() };
-        let run = s.engine.start(&tctx, &ns, &spec.workflow, input, Some(&format!("trigger/{}/{event_key}", t.metadata.name))).await?;
+        let run = s.engine.start(&tctx, ns, &spec.workflow, input, Some(&format!("trigger/{}/{event_key}", t.metadata.name))).await?;
         runs.push(json!({"trigger": t.metadata.name, "run": run.run_id}));
     }
-    Ok(Json(json!({"delivered": delivered.len(), "subscriptions": delivered, "runs": runs})))
+    Ok(json!({"delivered": delivered.len(), "subscriptions": delivered, "runs": runs}))
 }

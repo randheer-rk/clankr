@@ -51,6 +51,7 @@ mod quota;
 mod runs;
 pub mod scheduler;
 mod services;
+mod webhooks;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -157,6 +158,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
         .merge(nodes::join_route())
+        .merge(webhooks::routes())
         .route("/v1/auth/config", get(authz::auth_config))
         .merge(v1)
         .fallback(ui::serve)
@@ -291,7 +293,7 @@ static ANON_AUDIT: std::sync::Mutex<Option<(std::time::Instant, u32, u64)>> = st
 
 /// Whether to audit this denial individually, and how many the last window suppressed (to be
 /// recorded now, once).
-fn anon_audit_budget(now: std::time::Instant) -> (bool, u64) {
+pub(crate) fn anon_audit_budget(now: std::time::Instant) -> (bool, u64) {
     let mut g = ANON_AUDIT.lock().unwrap();
     let (start, n, dropped) = g.get_or_insert((now, 0, 0));
     let mut report = 0;
@@ -409,6 +411,7 @@ fn admit_kind(r: &Resource) -> Result<(), ApiError> {
         "AgentCronJob" => clankr_types::schedule::admit_cron_job(&r.spec).map(drop),
         "EventTrigger" => clankr_types::schedule::admit_event_trigger(&r.spec).map(drop),
         "ChatConnector" => clankr_types::chat::admit_chat_connector(&r.spec).map(drop),
+        "Webhook" => clankr_types::webhook::admit_webhook(&r.spec).map(drop),
         k if NOT_BUILT.contains(&k) => Err(ApiError::new(
             ErrorCode::UnsupportedCapability,
             format!("{k} is part of the resource model but has no controller yet, so a {k} would do nothing; see `What isn't built yet` in the README"),
