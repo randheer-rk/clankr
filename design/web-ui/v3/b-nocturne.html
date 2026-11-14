@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · Nocturne</title>
+<link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800&f[]=sentient@400,500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #101814; --bg-2: #16211C; --bg-3: #1E2B25; --line: #2A3A32;
+    --cream: #F1EADB; --cream-2: #B9B3A4; --cream-3: #7F7D70;
+    --marigold: #F2B84B; --coral: #FF7A59; --sage: #8FBF9F; --sky: #8FB8E8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1440px; background: var(--bg); color: var(--cream); font: 17px/1.55 "Cabinet Grotesk", sans-serif; -webkit-font-smoothing: antialiased; }
+  .serif { font-family: "Sentient", serif; }
+  .moon { position: absolute; top: -260px; right: -160px; width: 760px; height: 760px; border-radius: 50%; background: radial-gradient(circle at 40% 40%, rgba(242,184,75,.16), rgba(242,184,75,0) 62%); pointer-events: none; }
+  nav { display: flex; align-items: center; padding: 30px 80px; gap: 44px; position: relative; }
+  .brand { font: 800 25px "Cabinet Grotesk"; letter-spacing: -0.03em; }
+  .brand span { color: var(--marigold); }
+  .links { display: flex; gap: 32px; color: var(--cream-3); font-weight: 500; }
+  .links .on { color: var(--cream); }
+  .links .n { color: var(--coral); margin-left: 4px; }
+  .me { margin-left: auto; color: var(--cream-2); display: flex; align-items: center; gap: 12px; }
+  .me i { width: 40px; height: 40px; border-radius: 50%; background: var(--marigold); color: var(--bg); font: 700 15px/40px "Cabinet Grotesk"; text-align: center; font-style: normal; }
+  .hero { padding: 56px 80px 0; position: relative; display: grid; grid-template-columns: 1fr 470px; gap: 60px; }
+  .kicker { color: var(--marigold); font-weight: 500; letter-spacing: 0.01em; }
+  h1 { font: 800 104px/0.9 "Cabinet Grotesk"; letter-spacing: -0.045em; margin: 18px 0 26px; }
+  h1 span { color: var(--marigold); }
+  .lede { font: 400 23px/1.45 "Sentient", serif; color: var(--cream-2); max-width: 680px; }
+  .figs { display: flex; gap: 56px; margin-top: 40px; }
+  .figs b { display: block; font: 700 46px/1 "Cabinet Grotesk"; letter-spacing: -0.03em; }
+  .figs span { color: var(--cream-3); font-size: 15px; }
+  .sheet { background: var(--cream); color: #17201B; border-radius: 34px; padding: 36px 36px 32px; align-self: start; box-shadow: 0 40px 80px -40px rgba(0,0,0,.6); }
+  .sheet .who { display: flex; align-items: center; gap: 12px; color: #5A5E55; font-size: 15px; }
+  .sheet .who i { width: 34px; height: 34px; border-radius: 12px; background: #17201B; display: grid; place-items: center; }
+  .sheet h2 { font: 700 40px/1.02 "Cabinet Grotesk"; letter-spacing: -0.03em; margin: 22px 0 16px; }
+  .sheet blockquote { font: 400 20px/1.5 "Sentient", serif; color: #33392F; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0; }
+  .chips span { background: #E3DBC8; padding: 7px 14px; border-radius: 30px; font-size: 14px; font-weight: 500; }
+  .chips span.w { background: #F8D7A0; }
+  .sheet .comment { border: 1.5px solid #D6CDB8; border-radius: 18px; padding: 14px 16px; color: #8A8676; font-size: 15px; }
+  .acts { display: flex; gap: 12px; margin-top: 16px; }
+  .btn { padding: 17px 22px; border-radius: 40px; font-weight: 700; font-size: 17px; text-align: center; }
+  .btn.no { border: 1.5px solid #17201B; flex: 1; }
+  .btn.yes { background: #17201B; color: var(--marigold); flex: 1.7; }
+  .constellation { margin: 70px 80px 0; position: relative; height: 330px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .constellation svg { position: absolute; inset: 0; }
+  .star { position: absolute; transform: translate(-50%, -50%); text-align: center; }
+  .star .orb { width: 92px; height: 92px; border-radius: 50%; margin: 0 auto 14px; display: grid; place-items: center; font: 800 28px "Cabinet Grotesk"; }
+  .star b { font: 700 22px "Cabinet Grotesk"; letter-spacing: -0.01em; display: block; }
+  .star span { color: var(--cream-3); font-size: 14px; }
+  .label { position: absolute; left: 0; top: 22px; color: var(--cream-3); font-size: 15px; }
+  .rings { box-shadow: 0 0 0 10px rgba(255,122,89,.18), 0 0 0 22px rgba(255,122,89,.08); }
+  .row { display: grid; grid-template-columns: 1.2fr 1fr; gap: 80px; padding: 56px 80px 80px; }
+  .row h3 { font: 700 30px "Cabinet Grotesk"; letter-spacing: -0.02em; margin-bottom: 26px; }
+  .ev { display: grid; grid-template-columns: 90px 1fr; padding: 16px 0; border-top: 1px solid var(--line); }
+  .ev time { color: var(--cream-3); font-size: 15px; }
+  .ev p { font-size: 19px; }
+  .ev p small { display: block; font: 400 15px "Sentient", serif; color: var(--cream-3); margin-top: 2px; }
+  .meter { margin-bottom: 26px; }
+  .meter .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .meter b { font: 700 34px "Cabinet Grotesk"; letter-spacing: -0.02em; }
+  .meter b small { font-size: 18px; color: var(--cream-3); font-weight: 500; }
+  .meter span { color: var(--cream-2); }
+  .track { height: 6px; background: var(--bg-3); border-radius: 6px; margin-top: 10px; }
+  .track i { display: block; height: 100%; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="moon"></div>
+<nav>
+  <div class="brand">clankr<span>.</span></div>
+  <div class="links"><span class="on">Runs</span><span>Approvals<span class="n">3</span></span><span>Agents</span><span>Budgets</span><span>Audit</span></div>
+  <div class="me">Ana Nakamura <i>AN</i></div>
+</nav>
+
+<section class="hero">
+  <div>
+    <div class="kicker">Research report — run 1184faf4</div>
+    <h1>Your turn,<br><span>Ana.</span></h1>
+    <p class="lede">The agents have planned, researched and checked their sources. The report is ready, and it goes nowhere until an editor says so.</p>
+    <div class="figs"><div><b>4:12</b><span>minutes running</span></div><div><b>41.2k</b><span>tokens</span></div><div><b>$0.84</b><span>spent</span></div><div><b>0</b><span>work lost</span></div></div>
+  </div>
+  <div class="sheet">
+    <div class="who"><i><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="#F2B84B"/></svg></i>Review · editors · closes in 2 days</div>
+    <h2>Publish the research report?</h2>
+    <blockquote>“Durable execution means the workflow’s progress survives worker loss, so retries pick up where they left off.”</blockquote>
+    <div class="chips"><span>Verified ✓</span><span>12 sources</span><span class="w">2 flagged</span><span>From CI pipeline</span></div>
+    <div class="comment">Leave a note with your decision…</div>
+    <div class="acts"><span class="btn no">Send back</span><span class="btn yes">Approve &amp; publish →</span></div>
+  </div>
+</section>
+
+<section class="constellation">
+  <div class="label">How it got here</div>
+  <svg width="1280" height="330">
+    <g stroke="#3B5045" stroke-width="2" fill="none">
+      <path d="M150 175 C 260 175, 280 95, 400 95"/><path d="M150 175 C 260 175, 280 255, 400 255"/>
+      <path d="M400 95 C 520 95, 540 175, 660 175"/><path d="M400 255 C 520 255, 540 175, 660 175"/>
+    </g>
+    <path d="M660 175 H 900" stroke="#FF7A59" stroke-width="2" stroke-dasharray="2 10" stroke-linecap="round" fill="none"/>
+    <path d="M900 175 H 1140" stroke="#3B5045" stroke-width="2" stroke-dasharray="2 10" stroke-linecap="round" fill="none"/>
+  </svg>
+  <div class="star" style="left:150px;top:175px"><div class="orb" style="background:#24382E;color:var(--sage)">P</div><b>Plan</b><span>6s</span></div>
+  <div class="star" style="left:400px;top:95px"><div class="orb" style="background:#203247;color:var(--sky);width:72px;height:72px;font-size:24px">R</div><b>Research</b><span>2m 40s · moved once</span></div>
+  <div class="star" style="left:400px;top:255px"><div class="orb" style="background:#24382E;color:var(--sage);width:72px;height:72px;font-size:24px">V</div><b>Verify</b><span>1m 02s</span></div>
+  <div class="star" style="left:660px;top:175px"><div class="orb" style="background:#3A3420;color:var(--marigold)">G</div><b>Gather</b><span>both in</span></div>
+  <div class="star" style="left:900px;top:175px"><div class="orb rings" style="background:var(--coral);color:#101814">✎</div><b>Review</b><span>waiting on you</span></div>
+  <div class="star" style="left:1140px;top:175px;opacity:.4"><div class="orb" style="border:2px dashed var(--cream-3);color:var(--cream-3)">↗</div><b>Publish</b><span>next</span></div>
+</section>
+
+<section class="row">
+  <div>
+    <h3>What happened</h3>
+    <div class="ev"><time>5:37 pm</time><p>Paused for an editor<small>Five editors can decide; you were notified.</small></p></div>
+    <div class="ev"><time>5:37 pm</time><p>Research finished<small>On a second machine, after the first lost its connection.</small></p></div>
+    <div class="ev"><time>5:36 pm</time><p>A machine dropped off<small>Its unfinished work was set aside and safely redone.</small></p></div>
+    <div class="ev"><time>5:35 pm</time><p>Sources verified<small>Twelve sources, two marked low confidence.</small></p></div>
+  </div>
+  <div>
+    <h3>Today’s budget</h3>
+    <div class="meter"><div class="top"><b>$12.40 <small>/ $25</small></b><span>model spend</span></div><div class="track"><i style="width:50%;background:var(--sage)"></i></div></div>
+    <div class="meter"><div class="top"><b>611k <small>/ 1M</small></b><span>tokens</span></div><div class="track"><i style="width:61%;background:var(--marigold)"></i></div></div>
+    <div class="meter"><div class="top"><b>3 <small>/ 10</small></b><span>runs at once</span></div><div class="track"><i style="width:30%;background:var(--sky)"></i></div></div>
+  </div>
+</section>
+</body>
+</html>

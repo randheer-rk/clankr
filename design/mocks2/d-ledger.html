@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>D · Ledger</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#ffffff;--ink:#0a0a0a;--mute:#6b6b6b;--rule:#e4e4e4;--ember:#ff5f1f;--mono:"JetBrains Mono",monospace;--sans:"Inter Tight",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1200px;margin:0 auto;padding:0 32px}
+.top{display:flex;gap:36px;align-items:center;padding:22px 0;font-size:15px;color:var(--mute)}
+.top .wm{color:var(--ink);font-weight:600;font-size:18px;letter-spacing:-.02em;margin-right:auto}
+.top .run{font:13px var(--mono);color:var(--ink);background:#f4f4f4;padding:6px 10px;border-radius:3px}
+.hero{padding:70px 0 50px;display:grid;grid-template-columns:120px 1fr;gap:0}
+.hero .ts{font:13px var(--mono);color:var(--mute);padding-top:14px}
+h1{font-size:76px;line-height:.98;letter-spacing:-.045em;font-weight:600;margin:0 0 26px;max-width:900px}
+h1 span{color:var(--mute);font-weight:400}
+.lede{font-size:21px;color:var(--mute);max-width:620px;margin:0 0 26px;letter-spacing:-.01em}
+.go{font:500 14px var(--mono);border-bottom:2px solid var(--ink);padding-bottom:3px;margin-right:28px}
+/* the run */
+.run-h{display:grid;grid-template-columns:120px 1fr;border-top:1px solid var(--ink);padding:14px 0;font:12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.ev{display:grid;grid-template-columns:120px 260px 1fr;gap:0 32px;border-top:1px solid var(--rule);padding:30px 0}
+.ev .ts{font:13px var(--mono);color:var(--mute);padding-top:6px}
+.ev .k{font:14px var(--mono);padding-top:5px}
+.ev .k i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ink);margin-right:10px;vertical-align:middle}
+.ev.hot .k i{background:var(--ember)}
+.ev h3{font-size:30px;letter-spacing:-.03em;font-weight:600;margin:0 0 10px;line-height:1.1}
+.ev p{margin:0;color:var(--mute);max-width:620px}
+.ev pre{margin:16px 0 0;font:13px/1.6 var(--mono);color:var(--ink);background:#f6f6f6;padding:14px 16px;border-radius:3px;max-width:620px;overflow:hidden}
+.ev pre b{color:var(--ember);font-weight:500}
+.foot{border-top:1px solid var(--ink);padding:40px 0 80px;display:grid;grid-template-columns:120px 1fr 1fr;gap:32px}
+.foot .ts{font:13px var(--mono);color:var(--mute)}
+.foot h2{font-size:40px;letter-spacing:-.04em;margin:0 0 12px;font-weight:600;line-height:1.02}
+.foot p{color:var(--mute);margin:0}
+.foot ul{list-style:none;margin:0;padding:0;font-size:15px}
+.foot li{padding:10px 0;border-bottom:1px solid var(--rule);display:flex;justify-content:space-between}
+.foot li span{color:var(--mute);font:13px var(--mono)}
+</style></head><body><div class="wrap">
+<div class="top"><span class="wm">clankr</span><a>Docs</a><a>Architecture</a><a>SDKs</a><a>GitHub</a><span class="run">run blog/publish-weekly-8d1 · replay</span></div>
+
+<section class="hero">
+  <div class="ts">00:00.000</div>
+  <div>
+    <h1>Every step your agents take, written down before they take it.</h1>
+    <p class="lede">Clankr is an orchestration engine for AI agents. It runs them sandboxed on your machines, keeps each workflow as a log of events in Postgres, and brokers every key, budget and tool call. This page is one of those logs.</p>
+    <a class="go">$ clankrd --dev</a><a class="go" style="border-color:transparent;color:var(--mute)">Read the architecture</a>
+  </div>
+</section>
+
+<div class="run-h"><span>t+</span><span>event · what it means</span></div>
+
+<div class="ev"><div class="ts">00:00.012</div><div class="k"><i></i>run.started</div><div><h3>You describe it. Clankr schedules it.</h3><p>Agents, models, tools and workflows are resources, like Kubernetes objects but without Kubernetes. <code>clank apply</code>, and the scheduler places each agent on a node in a sandbox: a rootless container, gVisor, or a Firecracker microVM.</p><pre>kind: Workflow
+spec: { entrypoint: draft, nodes: { draft: { agentRef: writer }, review: { agentRef: reviewer } } }</pre></div></div>
+
+<div class="ev"><div class="ts">00:00.340</div><div class="k"><i></i>model.call.reserved</div><div><h3>Keys and budgets never enter the sandbox.</h3><p>The agent names a claim. The gateway on its node holds the real credential, reserves tokens from the namespace budget before the call, and settles the actual cost after. Who spent what is in the ledger.</p></div></div>
+
+<div class="ev hot"><div class="ts">00:31.502</div><div class="k"><i></i>node.lost</div><div><h3>The machine died. The run didn't.</h3><p>Each step commits in the same Postgres transaction as the work it schedules. When a node's lease expires, the instance is rescheduled with a new epoch and resumes from the last committed event. Stale writes from the old node are refused. No model or tool is called twice.</p><pre>#15 node.lost          eu-1 · epoch 41
+#16 instance.rescheduled  writer → eu-2 · epoch 42
+#17 step.resumed       draft ← <b>#14</b></pre></div></div>
+
+<div class="ev"><div class="ts">00:34.004</div><div class="k"><i></i>approval.requested</div><div><h3>Some tools wait for a person.</h3><p>Publishing, paying, deleting: gate the tool, and the run parks in an inbox for a minute or a week. The answer, and who gave it, is appended here and to a hash-chained audit log shipped off-site.</p></div></div>
+
+<div class="ev"><div class="ts">00:34.220</div><div class="k"><i></i>message.sent</div><div><h3>Agents talk through the node, durably.</h3><p>Services with stable names, request/reply with timeouts, topics with durable subscriptions. A subscriber that was down catches up. A reply that arrives late never haunts its caller.</p></div></div>
+
+<div class="ev"><div class="ts">08:12.901</div><div class="k"><i></i>run.completed</div><div><h3>And you can read all of it back.</h3><p>Inspect any run as it stood after any event. Fork a new run from there. Nothing is inferred; it's all in the log.</p><pre>$ clank run events publish-weekly-8d1 -n blog --at 16</pre></div></div>
+
+<section class="foot">
+  <div class="ts">end</div>
+  <div><h2>One binary on Postgres. A daemon per machine.</h2><p>Rust. No broker, no Kubernetes, no Temporal. SDKs for Python, TypeScript and Go. Apache-2.0.</p></div>
+  <ul><li>Sandboxes <span>container · gVisor · microVM</span></li><li>Fleet <span>rolling, canary, scale-to-zero</span></li><li>Governance <span>RBAC · OIDC · quotas · audit</span></li><li>Memory <span>versioned, snapshots</span></li></ul>
+</section>
+</div></body></html>

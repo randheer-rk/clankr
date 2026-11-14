@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · A · Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #F5F2EA; --paper-2: #EFEBE0; --ink: #1B1A17; --ink-2: #57534A; --ink-3: #8C877B;
+    --rule: #D8D1C1; --rule-2: #E6E0D2; --ox: #8E2C17; --ox-bg: #F3E2D8; --moss: #2E5A3A; --moss-bg: #E1EADB; --ochre: #9A6A12;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1440px; height: 900px; background: var(--paper); color: var(--ink); font: 13px/1.45 "IBM Plex Sans", sans-serif; display: grid; grid-template-columns: 208px 1fr 352px; grid-template-rows: 48px 1fr; overflow: hidden; }
+  .mono { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 24px; padding: 0 24px; border-bottom: 1px solid var(--ink); }
+  .mark { font: 600 20px "Newsreader", serif; letter-spacing: -0.01em; }
+  .mark small { font: 500 11px "IBM Plex Mono"; color: var(--ink-3); margin-left: 6px; letter-spacing: 0.06em; }
+  .ns { border: 1px solid var(--rule); padding: 4px 10px; font: 12px "IBM Plex Mono"; }
+  .search { margin-left: auto; width: 320px; border-bottom: 1px solid var(--rule); padding: 4px 0; color: var(--ink-3); font-size: 12px; display: flex; justify-content: space-between; }
+  .who { font: 12px "IBM Plex Mono"; color: var(--ink-2); }
+  nav { border-right: 1px solid var(--rule); padding: 20px 0; }
+  nav h6 { font: 500 10px "IBM Plex Mono"; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); padding: 0 24px 8px; }
+  nav a { display: flex; justify-content: space-between; padding: 7px 24px; color: var(--ink); text-decoration: none; }
+  nav a.on { background: var(--ink); color: var(--paper); }
+  nav a .n { font: 12px "IBM Plex Mono"; }
+  nav a .badge { background: var(--ox); color: #fff; padding: 0 6px; font: 500 11px "IBM Plex Mono"; }
+  nav .gap { height: 20px; }
+  main { padding: 24px 32px; overflow: hidden; }
+  .crumb { font: 12px "IBM Plex Mono"; color: var(--ink-3); }
+  h1 { font: 600 34px/1.1 "Newsreader", serif; letter-spacing: -0.015em; margin: 6px 0 10px; }
+  .meta { display: grid; grid-template-columns: repeat(5, auto); gap: 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); width: fit-content; }
+  .meta div { padding: 8px 20px 8px 0; margin-right: 20px; }
+  .meta b { display: block; font: 500 10px "IBM Plex Mono"; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+  .meta span { font: 13px "IBM Plex Mono"; }
+  .waiting { color: var(--ox); font-weight: 500; }
+  section { margin-top: 26px; }
+  section > h2 { font: 600 17px "Newsreader", serif; display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--ink); padding-bottom: 6px; }
+  section > h2 small { font: 11px "IBM Plex Mono"; color: var(--ink-3); font-weight: 400; }
+  .graph { position: relative; height: 200px; margin-top: 14px; }
+  .graph svg { position: absolute; inset: 0; }
+  .node { position: absolute; width: 136px; border: 1px solid var(--ink); background: var(--paper); padding: 7px 10px; }
+  .node .k { font: 500 10px "IBM Plex Mono"; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); display: flex; justify-content: space-between; }
+  .node .t { font-weight: 600; margin-top: 2px; }
+  .node .s { font: 11px "IBM Plex Mono"; color: var(--ink-2); }
+  .node.done .k::after { content: "✓"; color: var(--moss); }
+  .node.wait { border: 2px solid var(--ox); background: var(--ox-bg); }
+  .node.wait .k { color: var(--ox); }
+  .node.todo { border-style: dashed; color: var(--ink-3); }
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--rule-2); vertical-align: top; }
+  td.seq { width: 34px; color: var(--ink-3); }
+  td.at { width: 92px; color: var(--ink-2); }
+  td.ev { width: 150px; font-weight: 500; }
+  td.d { color: var(--ink-2); }
+  tr.hl td { background: var(--ox-bg); }
+  aside { border-left: 1px solid var(--rule); padding: 24px; background: var(--paper-2); overflow: hidden; }
+  .card { border: 1px solid var(--ink); background: var(--paper); }
+  .card .bar { background: var(--ox); color: #fff; padding: 6px 12px; font: 500 11px "IBM Plex Mono"; letter-spacing: 0.08em; text-transform: uppercase; display: flex; justify-content: space-between; }
+  .card .body { padding: 14px; }
+  .card h3 { font: 600 20px "Newsreader", serif; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 4px 8px; margin: 10px 0; font-size: 12px; }
+  .kv dt { color: var(--ink-3); font: 11px "IBM Plex Mono"; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 1px; }
+  .kv dd { font: 12px "IBM Plex Mono"; }
+  pre { background: var(--paper-2); border: 1px solid var(--rule); padding: 10px; font: 11.5px/1.5 "IBM Plex Mono"; color: var(--ink-2); white-space: pre-wrap; }
+  pre .k { color: var(--ink); }
+  textarea { width: 100%; height: 44px; margin-top: 10px; border: 1px solid var(--rule); background: #fff; font: 12px "IBM Plex Sans"; padding: 8px; resize: none; color: var(--ink-3); }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .btn { padding: 9px; text-align: center; font-weight: 600; border: 1px solid var(--ink); }
+  .btn.primary { background: var(--ink); color: var(--paper); }
+  .fine { font: 11px "IBM Plex Mono"; color: var(--ink-3); margin-top: 8px; }
+  .budget { margin-top: 22px; }
+  .budget h4 { font: 600 15px "Newsreader", serif; border-bottom: 1px solid var(--ink); padding-bottom: 4px; display: flex; justify-content: space-between; }
+  .budget h4 small { font: 11px "IBM Plex Mono"; color: var(--ink-3); font-weight: 400; }
+  .row { display: grid; grid-template-columns: 1fr auto; padding: 8px 0 4px; font-size: 12px; }
+  .row .v { font: 12px "IBM Plex Mono"; }
+  .meter { height: 6px; background: var(--rule-2); position: relative; }
+  .meter i { position: absolute; inset: 0 auto 0 0; background: var(--ink); }
+  .meter i.r { background: repeating-linear-gradient(90deg, var(--ink-3) 0 2px, transparent 2px 4px); }
+  .meter.warn i { background: var(--ochre); }
+</style>
+</head>
+<body>
+<header>
+  <div class="mark">Clankr<small>CONTROL PLANE</small></div>
+  <div class="ns">ns: research ▾</div>
+  <div class="search"><span>Jump to run, agent, approval…</span><span class="mono">⌘K</span></div>
+  <div class="who">user:ana@example.com · approver</div>
+</header>
+<nav>
+  <h6>Operate</h6>
+  <a class="on">Runs <span class="n">14</span></a>
+  <a>Approvals <span class="badge">3</span></a>
+  <a>Agents <span class="n">6</span></a>
+  <a>Deployments <span class="n">4</span></a>
+  <div class="gap"></div>
+  <h6>Govern</h6>
+  <a>Budgets &amp; quotas</a>
+  <a>Access</a>
+  <a>Audit log</a>
+  <div class="gap"></div>
+  <h6>Cluster</h6>
+  <a>Nodes <span class="n">2/2</span></a>
+</nav>
+<main>
+  <div class="crumb mono">Runs / research-report / 1184faf4</div>
+  <h1>research-report <span class="waiting" style="font-size:20px">— awaiting approval</span></h1>
+  <div class="meta">
+    <div><b>Run</b><span>1184faf4-adc6</span></div>
+    <div><b>Started by</b><span>sa:research/ci</span></div>
+    <div><b>Started</b><span>17:33:19 UTC</span></div>
+    <div><b>Elapsed</b><span>4m 12s</span></div>
+    <div><b>Spend</b><span>$0.84 · 41.2k tok</span></div>
+  </div>
+
+  <section>
+    <h2>Graph <small>generation 3 · digest 9f2c…e01a</small></h2>
+    <div class="graph">
+      <svg width="100%" height="200">
+        <g fill="none" stroke="#1B1A17" stroke-width="1">
+          <path d="M140 100 H170 V44 H196"/>
+          <path d="M140 100 H170 V156 H196"/>
+          <path d="M324 44 H354 V100 H380"/>
+          <path d="M324 156 H354 V100 H380"/>
+          <path d="M508 100 H564"/>
+        </g>
+        <path d="M692 100 H748" stroke="#8C877B" stroke-dasharray="3 3" fill="none"/>
+      </svg>
+      <div class="node done" style="left:12px;top:72px"><div class="k">agent</div><div class="t">plan</div><div class="s">planner · 6.1s</div></div>
+      <div class="node done" style="left:196px;top:16px"><div class="k">agent</div><div class="t">research</div><div class="s">researcher · 2m40s</div></div>
+      <div class="node done" style="left:196px;top:128px"><div class="k">agent</div><div class="t">verify</div><div class="s">verifier · 1m02s</div></div>
+      <div class="node done" style="left:380px;top:72px"><div class="k">join · all</div><div class="t">gather</div><div class="s">2 of 2 arrived</div></div>
+      <div class="node wait" style="left:564px;top:66px;width:128px"><div class="k">approval</div><div class="t">review</div><div class="s">editors · 3m</div></div>
+      <div class="node todo" style="left:748px;top:72px"><div class="k">activity</div><div class="t">publish</div><div class="s">publisher</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Event history <small>14 events · replay verified</small></h2>
+    <table class="mono">
+      <tr><td class="seq">14</td><td class="at">17:37:31.204</td><td class="ev">WaitStarted</td><td class="d">approve.review → approval 8b7d6a7f, deadline in 2d</td></tr>
+      <tr><td class="seq">13</td><td class="at">17:37:31.204</td><td class="ev">NodeEntered</td><td class="d">review (visit 1)</td></tr>
+      <tr><td class="seq">12</td><td class="at">17:37:31.198</td><td class="ev">TaskCompleted</td><td class="d">research#1.1 · epoch 1 · node-b · 18.4k tok · $0.41</td></tr>
+      <tr><td class="seq">11</td><td class="at">17:36:12.870</td><td class="ev">TaskFailed</td><td class="d">research#1.1 attempt 1 · retryable · lease lost (node-a fenced)</td></tr>
+      <tr><td class="seq">10</td><td class="at">17:35:58.002</td><td class="ev">TaskCompleted</td><td class="d">verify#1.1 · epoch 1 · node-a · 9.6k tok · $0.19</td></tr>
+      <tr><td class="seq">9</td><td class="at">17:34:51.443</td><td class="ev">TaskScheduled</td><td class="d">research#1.1 attempt 2 · queue agent/researcher</td></tr>
+      <tr><td class="seq">…</td><td class="at"></td><td class="ev"></td><td class="d">8 earlier events</td></tr>
+    </table>
+  </section>
+</main>
+<aside>
+  <div class="card">
+    <div class="bar"><span>Your decision</span><span>2d left</span></div>
+    <div class="body">
+      <h3>Publish the research report?</h3>
+      <dl class="kv">
+        <dt>Node</dt><dd>review · visit 1</dd>
+        <dt>Group</dt><dd>editors (you)</dd>
+        <dt>Requested</dt><dd>sa:research/ci</dd>
+        <dt>Digest</dt><dd>a1f3 7693 101c 0741</dd>
+      </dl>
+      <pre><span class="k">gather.summary</span>: "Durable execution means the workflow's progress survives worker loss…"
+<span class="k">verify.ok</span>: true
+<span class="k">research.sources</span>: 12 · 2 flagged</pre>
+      <textarea>Comment (recorded in the audit log)</textarea>
+      <div class="actions"><div class="btn">Reject</div><div class="btn primary">Approve</div></div>
+      <div class="fine">Bound to this digest. If the run data changes, review again.</div>
+    </div>
+  </div>
+  <div class="budget">
+    <h4>Budgets <small>research · today</small></h4>
+    <div class="row"><span>daily · cost</span><span class="v">$12.40 / $25.00</span></div>
+    <div class="meter"><i style="width:49.6%"></i><i class="r" style="left:49.6%;width:4%"></i></div>
+    <div class="row"><span>daily · tokens</span><span class="v">611k / 1.0M</span></div>
+    <div class="meter warn"><i style="width:61%"></i></div>
+    <div class="row"><span>activeRuns</span><span class="v">3 / 10</span></div>
+    <div class="meter"><i style="width:30%"></i></div>
+    <div class="row"><span>cpus</span><span class="v">3.5 / 8</span></div>
+    <div class="meter"><i style="width:44%"></i></div>
+  </div>
+</aside>
+</body>
+</html>

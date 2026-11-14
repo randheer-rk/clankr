@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · Inbox</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<link rel="stylesheet" href="vision.css">
+<style>
+  .row .who { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 11.5px; color: var(--ink-3); }
+  .row.on .who { color: rgba(255,255,255,.75); }
+  .due { font-size: 11.5px; font-weight: 600; color: var(--orange); }
+  .row.on .due { color: #fff; }
+  .face { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-size: 8px; font-weight: 700; color: #fff; }
+  .body2 { padding: 26px 34px 0; display: grid; grid-template-columns: 1fr 268px; gap: 26px; height: calc(100% - 52px - 74px); overflow: hidden; }
+  .eyebrow { color: var(--orange); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .doc { margin-top: 18px; border-radius: 14px; box-shadow: 0 0 0 .5px rgba(0,0,0,.1), 0 2px 8px rgba(0,0,0,.04); overflow: hidden; }
+  .doc .dh { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #FAFAFC; border-bottom: .5px solid var(--sep); color: var(--ink-2); font-weight: 500; }
+  .doc .dh .sp { margin-left: auto; color: var(--ink-3); font-weight: 400; }
+  .doc .db { padding: 18px 22px; font-size: 14px; line-height: 1.65; color: #2C2C2E; }
+  .doc .db h4 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 8px; color: var(--ink); }
+  .doc .db p + p { margin-top: 10px; }
+  .doc mark { background: #FFF1D6; border-radius: 3px; padding: 0 2px; color: inherit; }
+  .checks { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 14px; }
+  .chk { border-radius: 12px; padding: 12px 14px; box-shadow: 0 0 0 .5px rgba(0,0,0,.09); display: flex; gap: 10px; align-items: flex-start; }
+  .chk .ci { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; }
+  .chk b { font-weight: 600; display: block; }
+  .chk small { color: var(--ink-2); font-size: 12px; }
+  .side2 .card + .card { margin-top: 12px; }
+  .people { display: flex; flex-direction: column; gap: 9px; margin-top: 10px; }
+  .person { display: flex; align-items: center; gap: 9px; }
+  .person .pf { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 10.5px; font-weight: 600; }
+  .person > span:not(.pf) { color: var(--ink-3); margin-left: auto; font-size: 12px; }
+  .mini { display: flex; flex-direction: column; gap: 0; margin-top: 10px; }
+  .mini .s { display: flex; align-items: center; gap: 9px; padding: 5px 0; color: var(--ink-2); }
+  .mini .s i.d { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; color: #fff; flex: none; }
+  .mini .s i.d svg { width: 11px; height: 11px; stroke-width: 3; }
+  .mini .s.now { color: var(--ink); font-weight: 600; }
+  .actionbar { position: absolute; left: 0; right: 0; bottom: 0; height: 74px; display: flex; align-items: center; gap: 10px; padding: 0 34px; border-top: .5px solid var(--sep); background: rgba(255,255,255,.85); backdrop-filter: blur(20px); }
+  .note { flex: 1; height: 38px; border-radius: 9px; background: #F2F2F7; display: flex; align-items: center; padding: 0 12px; color: var(--ink-3); gap: 8px; }
+  .detail { position: relative; }
+  .b.lg { padding: 9px 18px; font-size: 13.5px; }
+</style>
+</head>
+<body>
+<div class="win">
+  <aside class="side">
+    <div class="ws"><div class="logo"><i data-lucide="bot"></i></div><div><b>Research</b><span>clankr · 2 nodes</span></div></div>
+    <div class="it on"><i data-lucide="inbox"></i>Inbox<span class="c hot">3</span></div>
+    <div class="it"><i data-lucide="play-circle"></i>Runs<span class="c">14</span></div>
+    <div class="it"><i data-lucide="sparkles"></i>Agents<span class="c">6</span></div>
+    <div class="it"><i data-lucide="workflow"></i>Workflows<span class="c">4</span></div>
+    <div class="grp">Govern</div>
+    <div class="it"><i data-lucide="gauge"></i>Budgets</div>
+    <div class="it"><i data-lucide="users"></i>People &amp; access</div>
+    <div class="it"><i data-lucide="scroll-text"></i>Audit log</div>
+    <div class="grp">Workspaces</div>
+    <div class="it"><span class="dot" style="background:#0A84FF"></span>Research</div>
+    <div class="it"><span class="dot" style="background:#30D158"></span>Support</div>
+    <div class="it"><span class="dot" style="background:#BF5AF2"></span>Growth</div>
+    <div class="me"><div class="av">AN</div><div><b style="font-weight:600">Ana Nakamura</b><div style="color:var(--ink-2);font-size:11.5px">Editor</div></div></div>
+  </aside>
+
+  <section class="list">
+    <div class="bar"><h2>Inbox</h2><span class="sp"></span><span class="ibtn"><i data-lucide="list-filter"></i></span><span class="ibtn"><i data-lucide="check-check"></i></span></div>
+    <div class="search"><i data-lucide="search"></i>Search approvals</div>
+    <div class="sec">Waiting for you · 3</div>
+    <div class="row on"><span class="st" style="background:#fff;color:var(--orange)"><i data-lucide="send" style="width:11px;height:11px;stroke-width:2.5"></i></span><div><b>Publish research report</b><div class="s">Research report · run 1184faf4</div><div class="who"><span class="face" style="background:#8E8E93">CI</span>CI pipeline · editors</div></div><span class="due">2d</span></div>
+    <div class="row"><span class="st" style="background:#FFF4E0;color:var(--orange)"><i data-lucide="newspaper" style="width:11px;height:11px;stroke-width:2.5"></i></span><div><b>Publish nightly digest</b><div class="s">Nightly digest · run 7d41aa02</div><div class="who"><span class="face" style="background:#64D2FF">S</span>Schedule · editors</div></div><span class="due">6h</span></div>
+    <div class="row"><span class="st" style="background:#FFF4E0;color:var(--orange)"><i data-lucide="mail" style="width:11px;height:11px;stroke-width:2.5"></i></span><div><b>Send 14 support replies</b><div class="s">Triage inbox · run c90f3d5e</div><div class="who"><span class="face" style="background:#30D158">MK</span>Mika Kato · support-leads</div></div><span class="t">no limit</span></div>
+    <div class="sec">Decided</div>
+    <div class="row"><span class="st" style="background:#E3F9E8;color:#1E9E44"><i data-lucide="check" style="width:12px;height:12px;stroke-width:3"></i></span><div><b>Publish vector-store report</b><div class="s">You approved · 9:10</div></div><span class="t">today</span></div>
+    <div class="row"><span class="st" style="background:#F2F2F7;color:var(--ink-2)"><i data-lucide="undo-2" style="width:12px;height:12px;stroke-width:2.5"></i></span><div><b>Send weekly summary</b><div class="s">Sent back by Leo · “wrong week”</div></div><span class="t">Mon</span></div>
+    <div class="row"><span class="st" style="background:#F2F2F7;color:var(--ink-3)"><i data-lucide="timer-off" style="width:12px;height:12px;stroke-width:2.5"></i></span><div><b>Publish nightly digest</b><div class="s">Expired, nobody decided</div></div><span class="t">Sun</span></div>
+  </section>
+
+  <section class="detail">
+    <div class="tb"><span class="ibtn"><i data-lucide="sidebar"></i></span><span style="margin:0 auto;color:var(--ink-2);font-weight:500">Approval · 1 of 3</span><span class="ibtn"><i data-lucide="chevron-up"></i></span><span class="ibtn"><i data-lucide="chevron-down"></i></span><span class="ibtn"><i data-lucide="external-link"></i></span></div>
+    <div class="body2">
+      <div style="min-width:0">
+        <div class="eyebrow"><i data-lucide="clock" style="width:14px;height:14px"></i>Closes Tuesday at 5:37 PM · then it’s sent back automatically</div>
+        <h1 style="margin-top:8px">Publish the research report?</h1>
+        <div class="meta"><span><i data-lucide="workflow" style="width:14px;height:14px"></i>research-report</span><span><i data-lucide="git-branch" style="width:14px;height:14px"></i>Started by CI pipeline</span><span><i data-lucide="users" style="width:14px;height:14px"></i>Editors decide</span></div>
+
+        <div class="doc">
+          <div class="dh"><i data-lucide="file-text" style="width:15px;height:15px"></i>Report draft · what you’re approving<span class="sp">v1 · 1,240 words</span></div>
+          <div class="db">
+            <h4>Durable execution, explained</h4>
+            <p>Durable execution means the workflow’s progress survives worker loss, so retries pick up where they left off instead of starting over. Each step is recorded before it runs, and a step that was interrupted is handed to another machine.</p>
+            <p>Three systems take different approaches. <mark>Two of the twelve sources date from 2021 and may describe behaviour that has since changed.</mark> The comparison below sticks to current documentation…</p>
+          </div>
+        </div>
+
+        <div class="checks">
+          <div class="chk"><span class="ci" style="background:#E3F9E8;color:#1E9E44"><i data-lucide="badge-check"></i></span><div><b>Verified</b><small>every claim checked</small></div></div>
+          <div class="chk"><span class="ci" style="background:#FFF4E0;color:#B25E00"><i data-lucide="flag"></i></span><div><b>2 old sources</b><small>older than 2 years</small></div></div>
+          <div class="chk"><span class="ci" style="background:#E5F1FF;color:var(--blue)"><i data-lucide="coins"></i></span><div><b>$0.84</b><small>41.2k tokens</small></div></div>
+        </div>
+      </div>
+
+      <div class="side2">
+        <div class="card">
+          <h3>Where the run is<span>4 of 6</span></h3>
+          <div class="mini">
+            <div class="s"><i class="d" style="background:var(--green)"><i data-lucide="check"></i></i>Plan</div>
+            <div class="s"><i class="d" style="background:var(--green)"><i data-lucide="check"></i></i>Research <span style="color:var(--ink-3);font-size:12px;margin-left:4px">retried once</span></div>
+            <div class="s"><i class="d" style="background:var(--green)"><i data-lucide="check"></i></i>Verify</div>
+            <div class="s"><i class="d" style="background:var(--green)"><i data-lucide="check"></i></i>Gather</div>
+            <div class="s now"><i class="d" style="background:var(--orange)"><i data-lucide="hand"></i></i>Review · you</div>
+            <div class="s" style="color:var(--ink-3)"><i class="d" style="background:#D1D1D6"><i data-lucide="send"></i></i>Publish</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Who can decide<span>5 editors</span></h3>
+          <div class="people">
+            <div class="person"><span class="pf" style="background:linear-gradient(135deg,#FFB86B,#F0705A)">AN</span>You</div>
+            <div class="person"><span class="pf" style="background:#5E5CE6">LB</span>Leo Brandt<span>viewed</span></div>
+            <div class="person"><span class="pf" style="background:#30B0C7">PR</span>Priya Rao</div>
+            <div class="person"><span class="pf" style="background:#AC8E68">+2</span>2 others</div>
+          </div>
+          <p style="color:var(--ink-3);font-size:12px;margin-top:10px">Whoever started a run can’t approve it.</p>
+        </div>
+      </div>
+    </div>
+    <div class="actionbar">
+      <div class="note"><i data-lucide="message-square" style="width:15px;height:15px"></i>Add a note to your decision…</div>
+      <span class="b sec2 lg">Send back</span><span class="b pri lg">Approve &amp; Publish</span>
+    </div>
+  </section>
+</div>
+<script>lucide.createIcons();</script>
+</body>
+</html>

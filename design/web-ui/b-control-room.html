@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · B · Control Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0A0C0B; --p1: #111412; --p2: #181C19; --line: #252B27; --line-2: #1C211E;
+    --tx: #D5DBD3; --tx-2: #8E978F; --tx-3: #5C655E;
+    --amber: #FFB020; --amber-d: #3A2A08; --green: #46D88A; --green-d: #10301F; --red: #FF5D4F; --cyan: #5CC8E8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1440px; height: 900px; background: var(--bg); color: var(--tx); font: 12.5px/1.45 "JetBrains Mono", monospace; overflow: hidden; display: grid; grid-template-rows: 40px 64px 1fr 28px; }
+  .top { display: flex; align-items: center; gap: 18px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--p1); }
+  .logo { font: 600 15px "Space Grotesk"; letter-spacing: 0.02em; }
+  .logo b { color: var(--amber); }
+  .tabs { display: flex; gap: 2px; }
+  .tabs span { padding: 4px 10px; color: var(--tx-2); }
+  .tabs span.on { color: var(--tx); background: var(--p2); box-shadow: inset 0 -2px var(--amber); }
+  .tabs .ct { color: var(--amber); }
+  .cmd { margin-left: auto; width: 380px; background: var(--bg); border: 1px solid var(--line); padding: 4px 10px; color: var(--tx-3); display: flex; justify-content: space-between; }
+  .cmd kbd { color: var(--tx-2); }
+  .led { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .alert { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 18px; padding: 0 16px; background: var(--amber-d); border-bottom: 1px solid #5A4210; }
+  .alert .tag { background: var(--amber); color: #120D00; font-weight: 700; padding: 3px 8px; letter-spacing: 0.06em; }
+  .alert .msg { font-size: 13px; }
+  .alert .msg small { display: block; color: #C9A766; font-size: 11.5px; }
+  .alert .keys { display: flex; gap: 8px; }
+  .k { border: 1px solid #6D5216; padding: 6px 12px; color: #F2DDB0; }
+  .k kbd { background: #6D5216; color: #FFE7B3; padding: 0 5px; margin-right: 6px; }
+  .k.go { background: var(--amber); color: #120D00; border-color: var(--amber); font-weight: 700; }
+  .k.go kbd { background: #120D00; color: var(--amber); }
+  .grid { display: grid; grid-template-columns: 1fr 360px; min-height: 0; }
+  .left { display: grid; grid-template-rows: auto 1fr; min-height: 0; border-right: 1px solid var(--line); }
+  .runbar { display: flex; gap: 28px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--p1); }
+  .runbar div b { display: block; color: var(--tx-3); font-weight: 400; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .runbar .name { font: 600 18px "Space Grotesk"; }
+  .panel-h { display: flex; justify-content: space-between; padding: 10px 16px 6px; color: var(--tx-3); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; }
+  .gantt { padding: 0 16px; position: relative; }
+  .axis { display: grid; grid-template-columns: 150px repeat(5, 1fr); color: var(--tx-3); font-size: 10.5px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  .lane { display: grid; grid-template-columns: 150px 1fr; height: 38px; align-items: center; border-bottom: 1px solid var(--line-2); }
+  .lane .lbl { display: flex; align-items: center; gap: 6px; }
+  .lane .lbl small { color: var(--tx-3); }
+  .track { position: relative; height: 100%; background-image: linear-gradient(90deg, var(--line-2) 1px, transparent 1px); background-size: 20% 100%; }
+  .bar { position: absolute; top: 10px; height: 18px; border-radius: 2px; font-size: 10.5px; padding: 1px 6px; overflow: hidden; white-space: nowrap; }
+  .bar.ok { background: var(--green-d); border: 1px solid #1F6B42; color: var(--green); }
+  .bar.fail { background: #3A1512; border: 1px solid #7A2A23; color: var(--red); }
+  .bar.wait { background: repeating-linear-gradient(135deg, var(--amber-d) 0 6px, #2A1F07 6px 12px); border: 1px solid var(--amber); color: var(--amber); }
+  .bar.q { background: transparent; border: 1px dashed var(--tx-3); color: var(--tx-3); }
+  .now { position: absolute; top: 22px; bottom: 0; left: calc(150px + 16px + (100% - 182px) * 0.86); width: 1px; background: var(--amber); }
+  .now::before { content: "now"; position: absolute; top: -2px; left: 5px; color: var(--amber); font-size: 10px; }
+  .log { margin: 10px 16px 0; border-top: 1px solid var(--line); }
+  .log div { display: grid; grid-template-columns: 36px 100px 150px 1fr; padding: 4px 0; border-bottom: 1px solid var(--line-2); color: var(--tx-2); }
+  .log div span:nth-child(3) { color: var(--tx); }
+  .log .amb span:nth-child(3) { color: var(--amber); }
+  .log .red span:nth-child(3) { color: var(--red); }
+  .right { display: grid; grid-template-rows: auto auto 1fr; min-height: 0; background: var(--p1); }
+  .box { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .box h5 { color: var(--tx-3); font-weight: 400; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px; display: flex; justify-content: space-between; }
+  .mini { position: relative; height: 128px; }
+  .mini svg { position: absolute; inset: 0; }
+  .mn { position: absolute; padding: 3px 7px; border: 1px solid var(--line); background: var(--p2); font-size: 11px; }
+  .mn.d { border-color: #1F6B42; color: var(--green); }
+  .mn.w { border-color: var(--amber); color: var(--amber); box-shadow: 0 0 0 3px rgba(255,176,32,.15); }
+  .mn.t { border-style: dashed; color: var(--tx-3); }
+  .subj { background: var(--bg); border: 1px solid var(--line); padding: 10px; font-size: 11.5px; color: var(--tx-2); line-height: 1.55; }
+  .subj b { color: var(--cyan); font-weight: 400; }
+  .meter { margin-bottom: 10px; }
+  .meter .l { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .meter .l span:last-child { color: var(--tx-2); }
+  .cells { display: grid; grid-template-columns: repeat(40, 1fr); gap: 2px; }
+  .cells i { height: 10px; background: var(--line); }
+  .cells i.on { background: var(--green); }
+  .cells i.res { background: #1F6B42; }
+  .cells.am i.on { background: var(--amber); }
+  .status { display: flex; gap: 20px; align-items: center; padding: 0 16px; border-top: 1px solid var(--line); background: var(--p1); color: var(--tx-3); font-size: 11px; }
+  .status .r { margin-left: auto; }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="logo"><b>▲</b> clankr</div>
+  <div class="tabs"><span class="on">runs</span><span>approvals <span class="ct">3</span></span><span>agents</span><span>nodes</span><span>budgets</span><span>audit</span></div>
+  <div class="cmd"><span>&gt; run 1184 · approve · ns research</span><kbd>ctrl k</kbd></div>
+  <div><span class="led" style="background:var(--green)"></span>ana@example.com</div>
+</div>
+<div class="alert">
+  <span class="tag">AWAITING YOU</span>
+  <div class="msg">review · research-report/1184faf4 needs an <b>editors</b> decision
+    <small>requested by sa:research/ci · digest a1f37693 · auto-reject in 1d 23h 56m</small></div>
+  <div class="keys"><span class="k"><kbd>v</kbd>view data</span><span class="k"><kbd>r</kbd>reject</span><span class="k go"><kbd>a</kbd>approve</span></div>
+</div>
+<div class="grid">
+  <div class="left">
+    <div class="runbar">
+      <div><b>workflow</b><span class="name">research-report</span></div>
+      <div><b>run</b>1184faf4-adc6</div>
+      <div><b>status</b><span style="color:var(--amber)">● WAITING</span></div>
+      <div><b>elapsed</b>4m 12s</div>
+      <div><b>tokens</b>41.2k</div>
+      <div><b>cost</b>$0.84</div>
+      <div><b>nodes</b>node-a, node-b</div>
+    </div>
+    <div style="min-height:0;overflow:hidden">
+      <div class="panel-h"><span>execution timeline · per node</span><span>events 14 · replay ✓</span></div>
+      <div class="gantt">
+        <div class="axis"><span></span><span>0:00</span><span>1:00</span><span>2:00</span><span>3:00</span><span>4:00</span></div>
+        <div class="lane"><div class="lbl">plan <small>agent</small></div><div class="track"><div class="bar ok" style="left:0;width:3%">6s</div></div></div>
+        <div class="lane"><div class="lbl">research <small>agent</small></div><div class="track"><div class="bar fail" style="left:3%;width:24%">#1 lease lost · node-a</div><div class="bar ok" style="left:28%;width:46%">#2 node-b · 18.4k tok · $0.41</div></div></div>
+        <div class="lane"><div class="lbl">verify <small>agent</small></div><div class="track"><div class="bar ok" style="left:3%;width:22%">node-a · 9.6k · $0.19</div></div></div>
+        <div class="lane"><div class="lbl">gather <small>join</small></div><div class="track"><div class="bar ok" style="left:74%;width:1.2%"></div></div></div>
+        <div class="lane"><div class="lbl" style="color:var(--amber)">review <small>approval</small></div><div class="track"><div class="bar wait" style="left:75%;width:25%">waiting on editors…</div></div></div>
+        <div class="lane"><div class="lbl" style="color:var(--tx-3)">publish <small>activity</small></div><div class="track"><div class="bar q" style="left:100%;width:0"></div></div></div>
+        <div class="now"></div>
+      </div>
+      <div class="log">
+        <div class="amb"><span>14</span><span>17:37:31.204</span><span>WaitStarted</span><span>approve.review → 8b7d6a7f</span></div>
+        <div><span>12</span><span>17:37:31.198</span><span>TaskCompleted</span><span>research#1.1 epoch 1 node-b</span></div>
+        <div class="red"><span>11</span><span>17:36:12.870</span><span>TaskFailed</span><span>research#1.1 lease lost, node-a fenced (epoch 4→5)</span></div>
+        <div><span>10</span><span>17:35:58.002</span><span>TaskCompleted</span><span>verify#1.1 epoch 1 node-a</span></div>
+        <div><span>9</span><span>17:34:51.443</span><span>TaskScheduled</span><span>research#1.1 attempt 2 · agent/researcher</span></div>
+        <div><span>8</span><span>17:34:51.440</span><span>TaskFailed</span><span>research#1.1 attempt 1 · retryable · backoff 2s</span></div>
+        <div><span>7</span><span>17:33:25.871</span><span>TaskCompleted</span><span>plan#1.1 epoch 1 node-a · 3.1k tok · $0.04</span></div>
+        <div><span>6</span><span>17:33:25.871</span><span>NodeEntered</span><span>research, verify (fan-out 2)</span></div>
+        <div><span>3</span><span>17:33:19.260</span><span>TaskScheduled</span><span>plan#1.1 · agent/planner</span></div>
+        <div><span>1</span><span>17:33:19.255</span><span>RunStarted</span><span>input {"topic": "durability"} · by sa:research/ci</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="right">
+    <div class="box">
+      <h5><span>graph</span><span>gen 3</span></h5>
+      <div class="mini">
+        <svg width="328" height="128"><g stroke="#3A443D" fill="none"><path d="M44 64 H60 V22 H74"/><path d="M44 64 H60 V106 H74"/><path d="M146 22 H160 V64 H174"/><path d="M146 106 H160 V64 H174"/><path d="M228 64 H240"/></g><path d="M306 64 H316" stroke="#5C655E" stroke-dasharray="2 2"/></svg>
+        <div class="mn d" style="left:0;top:53px">plan</div>
+        <div class="mn d" style="left:74px;top:11px">research</div>
+        <div class="mn d" style="left:74px;top:95px">verify</div>
+        <div class="mn d" style="left:174px;top:53px">gather</div>
+        <div class="mn w" style="left:240px;top:53px">review</div>
+        <div class="mn t" style="left:270px;top:95px">publish</div>
+      </div>
+    </div>
+    <div class="box">
+      <h5><span>gated data</span><span>visit 1</span></h5>
+      <div class="subj"><b>gather.summary</b> "Durable execution means the workflow's progress survives worker loss…"<br><b>verify.ok</b> true<br><b>research.sources</b> 12 (2 flagged)</div>
+    </div>
+    <div class="box" style="border:0">
+      <h5><span>budget · research · today</span><span>quota</span></h5>
+      <div class="meter"><div class="l"><span>cost</span><span>$12.40 / $25.00</span></div><div class="cells"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="res"></i><i class="res"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div class="meter"><div class="l"><span>tokens</span><span>611k / 1.0M</span></div><div class="cells am"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div class="meter"><div class="l"><span>activeRuns</span><span>3 / 10</span></div><div class="cells"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div class="meter"><div class="l"><span>cpus</span><span>3.5 / 8</span></div><div class="cells"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+    </div>
+  </div>
+</div>
+<div class="status"><span><span class="led" style="background:var(--green)"></span>leader clankrd-1 epoch 7</span><span>nodes 2/2 ready</span><span>watch rev 48211</span><span class="r">j/k move · enter open · ? keys</span></div>
+</body>
+</html>

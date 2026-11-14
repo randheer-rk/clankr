@@ -1,82 +1,25 @@
-import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion"
-import { clamp, Lower, Stage, t, Words } from "./kit"
+import { useCurrentFrame, useVideoConfig } from 'remotion'
+import { C, EventBar, mono, panel, Rail, Stage, t } from './kit'
 
-export const LOGBOOK_FRAMES = 400
-
-// a morning in a small shop, as the helper wrote it down
-const ROWS: { at: number; time: string; text: string; tone?: "bad" | "good" | "hot" }[] = [
-  { at: 40, time: "00:00.0", text: "run.started  publish-weekly-8d1" },
-  { at: 62, time: "00:00.1", text: "instance.placed  writer → eu-1" },
-  { at: 84, time: "00:00.3", text: "model.call.settled  3,412 tokens" },
-  { at: 106, time: "00:09.1", text: "message.sent  → blog/reviewer" },
-  { at: 128, time: "00:09.4", text: "step.started  draft · event #14" },
-  { at: 204, time: "00:31.5", text: "node.lost  eu-1 · epoch 41", tone: "bad" },
-  { at: 236, time: "00:33.9", text: "step.resumed  draft ← #14", tone: "good" },
-  { at: 262, time: "00:34.0", text: "reviewer: approved, one fix" },
-  { at: 288, time: "00:34.0", text: "approval.requested  publish.post", tone: "hot" },
-]
-const ROW_H = 84
-
-function Row({ r, f }: { r: (typeof ROWS)[number]; f: number }) {
-  const k = t(f, r.at, r.at + 20)
-  const write = interpolate(f, [r.at + 4, r.at + 30], [0, 100], clamp)
-  const glow = Math.max(0, 1 - Math.abs(f - (r.at + 16)) / 24)
-  const color = r.tone === "bad" ? "#ff8a7a" : r.tone === "good" ? "#8fe0ad" : r.tone === "hot" ? "#ffb37a" : "#f5f3ef"
-  return (
-    <div style={{ height: ROW_H, display: "flex", alignItems: "center", gap: 34, padding: "0 46px", opacity: k, borderTop: "1px solid rgba(255,255,255,.08)",
-      background: `linear-gradient(90deg, rgba(255,255,255,${0.05 * glow}), transparent 70%)` }}>
-      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 22, color: "rgba(245,243,239,.45)", width: 90 }}>{r.time}</span>
-      <span style={{ width: 12, height: 12, borderRadius: 6, background: color, boxShadow: `0 0 ${10 + glow * 24}px ${color}` }} />
-      <span style={{ fontSize: 28, fontWeight: 500, fontFamily: "'JetBrains Mono', monospace", letterSpacing: "-0.01em", color, clipPath: `inset(0 ${100 - write}% 0 0)` }}>{r.text}</span>
-    </div>
-  )
-}
+export const LOGBOOK_FRAMES = 390
 
 export function Logbook() {
-  const f = useCurrentFrame()
-  const fadeIn = t(f, 0, 26), fadeOut = 1 - t(f, 376, 400)
-  // the power cut: a flicker, near darkness, then the lights come back
-  const cut = f >= 176 && f < 214
-  const flick = f < 176 ? 1 : f < 186 ? (f % 3 === 0 ? 0.25 : 0.85) : f < 206 ? 0.08 : interpolate(f, [206, 222], [0.08, 1], clamp)
-  // camera: the sheet slides up as it fills, the view drifts and pushes in
-  // how many lines are written, as a smooth number, so the sheet glides rather than jumps
-  const written = ROWS.reduce((n, r) => n + t(f, r.at - 6, r.at + 18), 0)
-  const lift = interpolate(f, [0, 400], [0, 1], clamp)
-  const pull = t(f, 316, 360)
-
-  return (
-    <Stage glow="#1d2633" x={46} y={40}>
-      <AbsoluteFill style={{ opacity: fadeIn * fadeOut, filter: `brightness(${flick})` }}>
-        <AbsoluteFill style={{ perspective: 1500 }}>
-          <div style={{
-            position: "absolute", left: "50%", top: 120, width: 1100, marginLeft: -550, transformOrigin: "50% 0%",
-            transform: `translateY(${-lift * 40 - pull * 40}px) rotateX(${interpolate(f, [0, 400], [40, 30], clamp)}deg) rotateZ(${interpolate(f, [0, 400], [-6, -2], clamp)}deg) scale(${interpolate(f, [0, 316], [0.92, 1], clamp) * (1 - pull * 0.12)})`,
-          }}>
-            <div style={{ borderRadius: 34, overflow: "hidden", border: "1.5px solid rgba(255,255,255,.18)", background: "linear-gradient(170deg, rgba(255,255,255,.09), rgba(255,255,255,.02) 60%)", boxShadow: "0 60px 120px -40px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.2)" }}>
-              <div style={{ padding: "30px 46px", display: "flex", justifyContent: "space-between", fontFamily: "'JetBrains Mono', monospace", fontSize: 20, color: "rgba(245,243,239,.5)", letterSpacing: ".06em" }}>
-                <span>RUN · BLOG/PUBLISH-WEEKLY-8D1</span>
-                <span style={{ color: cut ? "#ff8a7a" : "#8fe0ad" }}>● {cut ? "eu-1 lost" : "eu-1 ok"}</span>
-              </div>
-              <div style={{ height: ROW_H * 6, overflow: "hidden", position: "relative" }}>
-                <div style={{ transform: `translateY(${-Math.max(0, written - 6) * ROW_H}px)`, transition: "none" }}>
-                  {ROWS.map(r => <Row key={r.at} r={r} f={f} />)}
-                </div>
-                <div style={{ position: "absolute", left: 0, right: 0, top: 0, height: 70, background: "linear-gradient(rgba(10,12,16,.6), transparent)" }} />
-              </div>
-            </div>
-          </div>
-        </AbsoluteFill>
-        <div style={{ position: "absolute", left: 0, right: 0, top: 690 }}>
-          <Words text="Every step is an event." at={52} size={56} out={160} />
-        </div>
-        <div style={{ position: "absolute", left: 0, right: 0, top: 690 }}>
-          <Words text="The node died. The run didn't." at={222} size={56} out={306} />
-        </div>
-        <div style={{ position: "absolute", left: 0, right: 0, top: 660 }}>
-          <Words text="Durable." at={322} size={110} head />
-        </div>
-        <Lower text="Resumes from the last committed event. No model or tool is called twice." at={340} style={{ top: 776 }} />
-      </AbsoluteFill>
-    </Stage>
-  )
+  const f = useCurrentFrame(), { width } = useVideoConfig(), compact = width < 1000
+  const phase = f < 120 ? 0 : f < 225 ? 1 : 2
+  const nodes = compact ? [[48, 252, 704, 132], [48, 443, 704, 132], [48, 634, 704, 132]] : [[72, 292, 390, 272], [605, 292, 390, 272], [1138, 292, 390, 272]]
+  const route = compact ? [[400, 384, 400, 443], [400, 575, 400, 634]] : [[462, 428, 605, 428], [995, 428, 1138, 428]]
+  const data = [
+    ['FIRST COMPUTER', 'Agent / writer', phase === 0 ? 'eu-1 · running' : 'eu-1 · offline', phase === 0 ? '●' : '×'],
+    ['SAVED PROGRESS', 'Step 14', 'draft saved', '▤'],
+    ['SECOND COMPUTER', 'Agent / writer', phase === 2 ? 'eu-2 · resumed' : 'eu-2 · ready', phase === 2 ? '✓' : '○'],
+  ]
+  return <Stage title="The work survives the machine." subtitle="Another computer picks up the same job, right where it stopped." phase={phase} phases={['Run', 'Recover', 'Continue']}>
+    {route.map(([x, y, xx, yy], i) => <Rail key={i} from={[x, y]} to={[xx, yy]} progress={i === 0 && phase === 0 ? t(f, 35, 90) : i === 1 && phase === 2 ? t(f, 225, 265) : undefined} />)}
+    {nodes.map(([x, y, w, h], i) => <div key={i} style={{ ...panel, position: 'absolute', left: x, top: y, width: w, height: h, padding: compact ? '20px 28px' : 32, borderColor: i === 1 ? C.yellow : i === 0 && phase > 0 ? C.red : i === 2 && phase === 2 ? C.blue : C.line, opacity: i === 2 && phase < 2 ? .55 : 1 }}>
+      <div style={{ color: C.muted, fontFamily: mono, fontSize: compact ? 20 : 18, letterSpacing: 1 }}>{data[i][0]}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: compact ? 9 : 29, fontSize: compact ? 35 : 43, fontWeight: 550, letterSpacing: -1 }}><span style={{ color: i === 0 && phase > 0 ? C.red : i === 2 && phase === 2 ? C.blue : C.yellow, fontSize: 34 }}>{data[i][3]}</span>{data[i][1]}</div>
+      <div style={{ fontFamily: mono, color: C.muted, fontSize: compact ? 23 : 22, marginTop: compact ? 7 : 24 }}>{data[i][2]}</div>
+    </div>)}
+    <EventBar event={phase === 0 ? 'Step recorded' : phase === 1 ? 'Computer crashed' : 'Work resumed'} detail={phase === 0 ? 'step 14' : phase === 1 ? 'eu-1' : 'eu-2'} success={phase === 2} />
+  </Stage>
 }

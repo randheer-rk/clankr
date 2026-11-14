@@ -1,190 +1,219 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
-import { motion, useMotionValueEvent, useScroll, useSpring, useTransform } from "motion/react"
-import { Film } from "./Film"
+import { lazy, Suspense, useEffect, useState, type CSSProperties, type ReactNode } from "react"
+import type { FilmId } from "./films"
+import { Lockbot } from "./Lockbot"
 import "./styles.css"
 
-const GITHUB = "https://github.com/randheer/clankr"
-const ease = [0.16, 1, 0.3, 1] as const
+const Film = lazy(() => import("./Film"))
 
-/** Rises into place the first time it scrolls into view. */
-function Up({ children, delay = 0, className, y = 40 }: { children: ReactNode; delay?: number; className?: string; y?: number }) {
+const GITHUB = "https://github.com/randheer-rk/clankr"
+const ADR = `${GITHUB}/tree/main/docs/adr`
+
+const HEART = "M1 0h2v1h1v-1h2v1h1v2h-1v1h-1v1h-1v1h-1v-1h-1v-1h-1v-1h-1v-2h1z"
+const Px = ({ d, box, className }: { d: string; box: string; className?: string }) =>
+  <svg className={className} viewBox={box} aria-hidden="true" shapeRendering="crispEdges"><path d={d} fillRule="evenodd" /></svg>
+const Play = () => <Px box="0 0 7 8" d="M0 0h2v1h2v1h2v1h1v2h-1v1h-2v1h-2v1h-2z" />
+
+function Agent({ x, walk, ghost }: { x: number; walk?: boolean; ghost?: boolean }) {
   return (
-    <motion.div className={className} initial={{ opacity: 0, y }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: "-10% 0px" }} transition={{ duration: 0.9, ease, delay }}>
-      {children}
-    </motion.div>
+    <div className={`agent ${walk ? "walk" : ""} ${ghost ? "ghost" : ""}`} style={{ left: `${x}%` }} aria-hidden="true">
+      <svg viewBox="0 0 12 14" shapeRendering="crispEdges">
+        <rect className="body" width="12" height="10" fill="#FFF1E8" />
+        <rect className="body" x="1.5" y="10" width="3" height="4" fill="#FFF1E8" />
+        <rect className="body" x="7.5" y="10" width="3" height="4" fill="#FFF1E8" />
+        <rect x="2.5" y="3.5" width="2" height="2.5" fill="#0D0E16" />
+        <rect x="7.5" y="3.5" width="2" height="2.5" fill="#0D0E16" />
+      </svg>
+    </div>
   )
 }
 
-/** The Lockbot, as the animated SVG in docs/assets: its eyes look around and blink on their own. */
-function Lockbot({ size = 26 }: { size?: number }) {
-  return <img src="./clankr-mark-animated.svg" width={size} height={Math.round(size * 112 / 104)} alt="" draggable={false} />
-}
-
-/* ── hero ─────────────────────────────────────────────────── */
-
-const H1 = ["Agents", "that", "work", "*shifts,*", "not", "demos."]
+type Tone = "bad" | "good" | "wait"
+const RUN: { t: string; text: string; x: number; tone?: Tone; say?: string }[] = [
+  { t: "00:00", text: "An agent starts writing on computer 1", x: 5 },
+  { t: "00:09", text: "First draft saved", x: 21 },
+  { t: "00:31", text: "Computer 1 crashes", x: 21, tone: "bad", say: "The draft is safe." },
+  { t: "00:31", text: "The agent moves to computer 2", x: 39 },
+  { t: "00:33", text: "It picks up the saved draft", x: 54, tone: "good", say: "No starting over." },
+  { t: "00:34", text: "Ready to publish. It asks you first.", x: 68, tone: "wait", say: "It will wait as long as you need." },
+  { t: "", text: "You said yes", x: 68, tone: "good" },
+  { t: "", text: "Published", x: 108, tone: "good", say: "Clankr remembers who approved it." },
+]
+const PARKED = 5
+const clock = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
 
 function Hero() {
-  const ref = useRef<HTMLElement>(null)
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end start"] })
-  const botY = useTransform(scrollYProgress, [0, 1], [0, 140])
-  const botR = useTransform(scrollYProgress, [0, 1], [0, -6])
-  const textY = useTransform(scrollYProgress, [0, 1], [0, 60])
-  const fade = useTransform(scrollYProgress, [0, 0.7], [1, 0])
+  const [step, setStep] = useState(() => (matchMedia("(prefers-reduced-motion: reduce)").matches ? PARKED : 0))
+  const [wait, setWait] = useState(0)
+  useEffect(() => {
+    if (step === PARKED) {
+      const id = setInterval(() => setWait(w => w + 1), 1000)
+      return () => clearInterval(id)
+    }
+    if (step === RUN.length - 1) return
+    const id = setTimeout(() => setStep(step + 1), step === 2 ? 1300 : 1700)
+    return () => clearTimeout(id)
+  }, [step])
+  const ev = RUN[step]
+  const done = step === RUN.length - 1
   return (
-    <header ref={ref} className="hero">
+    <header className="hero">
       <div className="wrap">
-        <motion.div style={{ y: textY, opacity: fade }}>
-          <h1>
-            {H1.map((w, i) => {
-              const em = w.startsWith("*")
-              const text = w.replaceAll("*", "")
-              return (
-                <span key={i}><span className="w">
-                  <motion.span initial={{ y: "110%" }} animate={{ y: 0 }} transition={{ duration: 0.9, ease, delay: 0.1 + i * 0.07 }}>
-                    {em ? <em>{text}</em> : text}
-                  </motion.span>
-                </span>{" "}</span>
-              )
-            })}
-          </h1>
-          <motion.p className="lede" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.9, ease, delay: 0.6 }}>
-            Clankr runs your AI agents like a plant runs machines: each one <b>sandboxed on a node</b>, every step <b>logged before it happens</b>, every key <b>kept at the gate</b>. When a machine fails, the job carries on. When a tool needs sign-off, it waits for you.
-          </motion.p>
-          <motion.div className="row" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.9, ease, delay: 0.75 }}>
-            <a className="btn" href="#start">Build it in an afternoon</a>
-            <a className="btn o" href="#how">How it runs</a>
-          </motion.div>
-        </motion.div>
-        <motion.div className="bot" style={{ y: botY, rotate: botR }} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 1.2, ease, delay: 0.3 }}>
-          <Lockbot size={360} />
-          <div className="plate-tag">Model <b>Lockbot</b><br />Rust · Postgres · one binary<br />Ser. no. <b>0.1.0</b></div>
-        </motion.div>
+        <div className="copy">
+          <div className="head"><h1>AI agents you can <em>leave running.</em></h1><Lockbot size={190} /></div>
+          <div className="sub">
+            <p className="lede">Clankr looks after your AI agents so they can do real work, every day. It gives each one a safe place to work and the tools it is allowed to use. If a computer crashes, the work carries on. If an agent wants to do something risky, it asks you first.</p>
+            <div className="row">
+              <a className="btn" href="#start"><Play />Get started</a>
+              <a className="btn o" href={GITHUB}>See it on GitHub</a>
+            </div>
+          </div>
+        </div>
+        <div className="hud">
+          <span className="run">Job<b>weekly blog post</b></span>
+          <span className="ev">Steps saved<b>{String(step + 2).padStart(3, "0")}</b></span>
+          <span>Computers<Px className={`heart ${step >= 2 ? "lost" : ""}`} box="0 0 7 6" d={HEART} /><Px className="heart" box="0 0 7 6" d={HEART} /></span>
+        </div>
+        <div className="field">
+          <div className={`node n1 ${step >= 2 ? "lost" : ""}`}><b>Computer 1</b><span>{step >= 2 ? "crashed" : "working"}</span></div>
+          <div className={`node n2 ${step >= 3 ? "live" : ""}`}><b>Computer 2</b><span>{step >= 3 ? "working" : "spare"}</span></div>
+          {step >= 3 && <div className="flag"><span>Saved here</span></div>}
+          {step >= 2 && <Agent x={21} ghost />}
+          {step !== 2 && <Agent key={step < 2 ? "one" : "two"} x={ev.x} walk={step !== PARKED && !done} />}
+          <div className={`gate ${step > PARKED ? "open" : ""}`}><i /><b>Asks first</b></div>
+          {step === PARKED && (
+            <div className="ask" role="group" aria-label="The agent is asking for approval">
+              The agent wants to publish. OK?
+              <span className="wait">Waiting<b>{clock(wait)}</b><i /></span>
+              <button type="button" onClick={() => setStep(PARKED + 1)}>Yes, publish</button>
+            </div>
+          )}
+          {done && (
+            <div className="ask done" role="group" aria-label="Job finished">
+              Published. Job done.
+              <button type="button" onClick={() => { setWait(0); setStep(0) }}>Watch again</button>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="cap" aria-live="polite">
+        <div className="wrap">
+          <span>{ev.t || clock(34 + wait)}</span>
+          <b className={ev.tone}>{ev.text}</b>
+          {ev.say && <em>{ev.say}</em>}
+        </div>
       </div>
     </header>
   )
 }
 
-/* ── strip ────────────────────────────────────────────────── */
-
-const BELT = ["Durable workflows", "Sandboxed runtimes", "Brokered credentials", "Human approvals", "Audit, off-site", "Fleet scheduling", "Durable messaging", "Python · TypeScript · Go"]
-
-function Strip() {
-  return (
-    <div className="strip" aria-hidden>
-      <div>{[...BELT, ...BELT].map((b, i) => <span key={i}><i>■</i>{b}</span>)}</div>
-    </div>
-  )
-}
-
-/* ── plates ───────────────────────────────────────────────── */
-
-const PLATES: [string, string, ReactNode][] = [
-  ["It picks up where it fell.", "Every workflow step is an event in Postgres, committed together with the work it schedules. A node dies, the run moves, and resumes at the last line. No model is ever called twice.",
-    <>#15 <span className="y">node.lost</span>        eu-1{"\n"}#16 <span className="g">step.resumed</span>     draft ← <b>#14</b></>],
-  ["Keys stay at the gate.", "Agents name a claim; the gateway on their node holds the real key, reserves budget before the call and settles after. A runaway loop hits the budget, not your card.",
-    <>ModelClaim default → anthropic{"\n"}budget: blog/monthly  <b>▮▮▮▮▮</b>▯▯ 71%</>],
-  ["Some levers need a hand.", "Mark a tool as approval-gated and the run parks in an inbox until a person says yes. The decision, and who made it, goes in the hash-chained audit log.",
-    <><span className="d">$</span> clank approve a-91c2 --reason "ship it"{"\n"}audit #14,212 <span className="g">✓ sealed</span></>],
+const POWER: { name: string; icon: ReactNode; title: string; body: string; code: ReactNode }[] = [
+  { name: "1UP", icon: <Px box="0 0 7 6" d={HEART} />, title: "A crash doesn't lose the work.",
+    body: "Clankr saves each step as an agent finishes it. If its computer crashes, the agent picks up on another one, right where it stopped. No starting over.",
+    code: <><span className="r">Computer 1 crashed</span>{"\n"}<span className="b">Agent carried on from computer 2</span></> },
+  { name: "Key", icon: <Px box="0 0 8 7" d="M0 2h1v-1h3v1h1v1h3v2h-1v-1h-1v1h-2v1h-3v-1h-1zM2 3h1v1h-1z" />, title: "Your passwords stay with you.",
+    body: "Agents never see your keys or logins. Clankr does the sensitive part for them, and every team has a spending cap, so a confused agent can't run up a bill.",
+    code: <>Blog team, this month{"\n"}<span className="y">▮▮▮▮▮</span><span className="d">▯▯</span> 71% of budget used</> },
+  { name: "Hold", icon: <Px box="0 0 7 6" d="M1 0h2v6h-2zM4 0h2v6h-2z" />, title: "Nothing risky without a yes.",
+    body: "You choose what needs a human: publishing, emailing customers, spending money. The agent waits until a person says yes, and Clankr remembers who did.",
+    code: <>Publish the weekly post?{"\n"}<span className="b">Yes</span> <span className="d">· approved by you</span></> },
 ]
 
-function Plates() {
+function Problem() {
   return (
     <section className="sec">
       <div className="wrap">
         <div className="head">
-          <Up><span className="label">What it's for</span><h2>Many agents. <em>For real.</em></h2></Up>
-          <Up delay={0.1}><p className="lede">Getting one agent working in a notebook is easy. Running many of them for real raises problems no single agent should have to solve.</p></Up>
+          <h2>One agent is easy. <em style={{ color: "var(--blue)" }}>A team is hard work.</em></h2>
+          <p className="lede">An agent that works once on your laptop is a demo. Agents you rely on every day need a place to run, someone to pick them up when they fall, and someone to say no. That is what Clankr is for.</p>
         </div>
-        <div className="plates">
-          {PLATES.map(([t, p, code], i) => (
-            <Up key={t} delay={i * 0.1} className="plate">
-              <span className="label">Plate 0{i + 1}</span><h3>{t}</h3><p>{p}</p><pre>{code}</pre>
-            </Up>
-          ))}
-        </div>
+        {POWER.map((p, i) => (
+          <div key={p.name} className={`power c${i + 1}`}>
+            <div className="item px">{p.icon}{p.name}</div>
+            <div><h3>{p.title}</h3><p>{p.body}</p></div>
+            <pre>{p.code}</pre>
+          </div>
+        ))}
       </div>
     </section>
   )
 }
 
-/* ── films ────────────────────────────────────────────────── */
+const DEMOS: { id: FilmId; label: string; detail: string; c: string }[] = [
+  { id: "logbook", label: "A computer crashes", detail: "Halfway through a job, the computer goes down. Another one finishes it.", c: "var(--red)" },
+  { id: "room", label: "An agent oversteps", detail: "An agent reaches for something it was never given. It gets a no.", c: "var(--blue)" },
+  { id: "ask", label: "A person decides", detail: "A risky step waits for a human. Their answer is remembered.", c: "var(--yellow)" },
+]
 
-function Films() {
+function Clips() {
+  const [selected, setSelected] = useState(0)
+  const demo = DEMOS[selected]
   return (
-    <section className="sec" style={{ paddingTop: 0 }}>
+    <section id="demos" className="sec demos">
       <div className="wrap">
         <div className="head">
-          <Up><span className="label">Shift report</span><h2>Watch a node <em>die.</em></h2></Up>
-          <Up delay={0.1}><p className="lede">The writer is halfway through a draft when its node's lease expires. Thirty seconds later it's on another node, at the same line.</p></Up>
+          <h2>See it <em>in action.</em></h2>
+          <p className="lede">Three short clips showing how Clankr keeps work safe: when a computer crashes, when an agent tries something it shouldn't, and when a decision needs you.</p>
         </div>
-        <Up className="film-box"><Film id="logbook" /><div className="film-cap"><b>Durable</b><span>resumes from event #14 · no replay</span></div></Up>
-        <div className="films">
-          <Up className="film-box"><Film id="room" /><div className="film-cap"><b>Sandboxed</b><span>container · gVisor · microVM</span></div></Up>
-          <Up delay={0.1} className="film-box"><Film id="ask" /><div className="film-cap"><b>Gated</b><span>approval in the audit log</span></div></Up>
+        <div className="cabinet">
+          <div role="tabpanel" id="demo-panel" aria-labelledby={`demo-tab-${demo.id}`} tabIndex={0}>
+            <Suspense fallback={<div className="film" style={{ aspectRatio: "16 / 9" }} />}><Film id={demo.id} /></Suspense>
+          </div>
+          <div className="deck">
+            <div role="tablist" aria-label="Clips" style={{ display: "contents" }}>
+              {DEMOS.map((item, i) => <button key={item.id} type="button" role="tab" id={`demo-tab-${item.id}`} aria-selected={selected === i} aria-controls="demo-panel" tabIndex={selected === i ? 0 : -1} style={{ "--c": item.c } as CSSProperties} onClick={() => setSelected(i)} onKeyDown={event => {
+                if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return
+                event.preventDefault()
+                const back = event.key === "ArrowLeft" || event.key === "ArrowUp"
+                const next = event.key === "Home" ? 0 : event.key === "End" ? DEMOS.length - 1 : (i + (back ? -1 : 1) + DEMOS.length) % DEMOS.length
+                setSelected(next)
+                event.currentTarget.parentElement?.querySelectorAll("button")[next]?.focus()
+              }}>{item.label}</button>)}
+            </div>
+            <p>{demo.detail}</p>
+          </div>
         </div>
       </div>
     </section>
   )
 }
 
-/* ── the replay ───────────────────────────────────────────── */
-
-const LOG: [string, string, string][] = [
-  ["00:00.012", "run.started", "blog/publish-weekly-8d1"],
-  ["00:00.090", "instance.placed", "writer → eu-1 · microVM"],
-  ["00:00.340", "model.call.reserved", "4,000 tok · blog/monthly"],
-  ["00:09.077", "model.call.settled", "3,412 tok · $0.0112"],
-  ["00:09.081", "message.sent", "→ clankr://agents/blog/reviewer"],
-  ["00:31.502", "node.lost", "eu-1 · lease expired · epoch 41"],
-  ["00:31.640", "instance.rescheduled", "writer → eu-2 · epoch 42"],
-  ["00:33.910", "step.resumed", "draft ← #14 · no replay"],
-  ["00:34.004", "approval.requested", "publish.post · inbox"],
-  ["08:12.901", "approval.granted", "ops@ · \"LGTM\""],
-  ["08:13.120", "audit.appended", "#14,212 · chained · shipped"],
+const LOG: [string, string][] = [
+  ["00:00", "A new job: write the weekly blog post"],
+  ["00:00", "A writer agent starts on computer 1"],
+  ["00:00", "It asks to use the AI. Budget checked."],
+  ["00:09", "Draft written. It cost about one cent."],
+  ["00:09", "Draft passed to a reviewer agent"],
+  ["00:31", "Computer 1 crashes"],
+  ["00:31", "The writer moves to computer 2"],
+  ["00:33", "It carries on from the saved draft"],
+  ["00:34", "Ready to publish. Waiting for a person."],
+  ["08:12", "A person says yes"],
+  ["08:13", "Published. Every step is remembered."],
 ]
 
-const STEPS: { at: number; label: string; title: string; body: ReactNode }[] = [
-  { at: 1, label: "Describe", title: "You apply it. Clankr places it.", body: <>Agents, models, tools and workflows are resources: like Kubernetes objects, without Kubernetes. <code>clank apply</code>, and the scheduler puts each agent on a node, in a rootless container, gVisor, or a Firecracker microVM.</> },
-  { at: 3, label: "Broker", title: "Keys never enter the sandbox.", body: <>The agent names a claim. The gateway on its node holds the real credential, reserves tokens from the budget before the call, and settles the true cost after. Who spent what is in the log.</> },
-  { at: 7, label: "Survive", title: "The machine died. The run didn't.", body: <>A step commits in the same transaction as the work it schedules. When a lease expires, the instance is rescheduled with a new epoch and resumes from the last committed event. Stale writes from the old node are refused.</> },
-  { at: 9, label: "Gate", title: "Some tools wait for a person.", body: <>Gate the tool, and the run parks in an inbox for a minute or a week. The answer, and who gave it, is appended here and to a hash-chained audit log you can ship off-site and verify with <code>clank audit-check</code>.</> },
-  { at: 10, label: "Read back", title: "All of it, in order, forever.", body: <>Inspect any run as it stood after any event. Fork a new run from there. Nothing is inferred; it's in the log.</> },
-]
-
-function Replay() {
-  const [on, setOn] = useState(0)
-  const refs = useRef<(HTMLDivElement | null)[]>([])
-  useEffect(() => {
-    const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && setOn(+(e.target as HTMLElement).dataset.n!)), { rootMargin: "-45% 0px -45% 0px" })
-    refs.current.forEach(r => r && io.observe(r))
-    return () => io.disconnect()
-  }, [])
-  const cursor = STEPS[on].at
+function Record() {
   return (
     <section id="how" className="sec">
       <div className="wrap">
         <div className="head">
-          <Up><span className="label">How it runs</span><h2>One run, <em>replayed.</em></h2></Up>
-          <Up delay={0.1}><p className="lede">Every run is a log of events. This is a real one's shape, from the first placement to the sealed audit line.</p></Up>
+          <h2>Every job <em style={{ color: "var(--red)" }}>leaves a record.</em></h2>
         </div>
         <div className="replay">
-          <div className="pin">
-            <Up className="log">
-              <div className="hd"><b>clank run events</b><span>publish-weekly-8d1</span></div>
-              {LOG.map(([t, k, n], i) => (
-                <div key={i} className={`r ${i === cursor ? "on" : i < cursor ? "seen" : ""}`}><span>{t}</span><span><span className="k">{k}</span>  <span>{n}</span></span></div>
-              ))}
-            </Up>
-          </div>
-          <div className="steps">
-            {STEPS.map((s, i) => (
-              <div key={s.label} ref={el => { refs.current[i] = el }} data-n={i} className="step">
-                <Up><span className="label">0{i + 1} · {s.label}</span></Up>
-                <Up delay={0.05}><h3>{s.title}</h3></Up>
-                <Up delay={0.1}><p>{s.body}</p></Up>
-              </div>
+          <div className="log">
+            <div className="hd"><span>Job record</span><span>Weekly blog post</span></div>
+            {LOG.map(([t, k], i) => (
+              <div key={i} className={i === 3 ? "r on" : "r"}><span>{t}</span><b>{k}</b></div>
             ))}
+          </div>
+          <div className="story">
+            <div>
+              <h3>Nothing is forgotten.</h3>
+              <p>Open any job later and read it from start to finish: what was done, when, and who said yes. Nobody has to guess.</p>
+            </div>
+            <div>
+              <h3>You see what it cost.</h3>
+              <p>Clankr checks the budget before an agent uses the AI, and keeps count afterwards. You can see what every job spent, down to the cent.</p>
+            </div>
           </div>
         </div>
       </div>
@@ -192,83 +221,91 @@ function Replay() {
   )
 }
 
-/* ── manifesto ────────────────────────────────────────────── */
-
-function Say() {
-  const ref = useRef<HTMLDivElement>(null)
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start 90%", "start 40%"] })
-  const x = useSpring(useTransform(scrollYProgress, [0, 1], [-60, 0]), { stiffness: 80, damping: 20 })
+function Why() {
   return (
-    <section className="sec" style={{ paddingTop: 0 }}>
-      <div className="wrap say" ref={ref} style={{ paddingTop: "var(--sec)" }}>
-        <motion.h2 style={{ x }}>No Kubernetes.<br />No Temporal.<br /><em>One binary.</em></motion.h2>
-        <Up delay={0.15}>
-          <p><b>clankrd</b> is the whole control plane: API, scheduler, workflow engine, gateway, inbox and web UI, on a Postgres you already know how to back up. Nodes dial in over mTLS, so they can sit behind NAT. Postgres is the source of truth and the message bus: dispatch is <code>SKIP LOCKED</code>, wake-ups are <code>NOTIFY</code>, leadership is a lease row.</p>
-          <p><b>clankr-node</b> is a small daemon on each machine that runs agents under <b>kennel</b>. Write agents in Python, TypeScript or Go with an SDK that hands you work and messages. Describe them in YAML. <code>clank apply</code>. That's the job.</p>
-          <div className="row"><a className="btn o" href={`${GITHUB}/tree/main/docs/adr`}>Read the design notes</a></div>
-        </Up>
+    <section className="sec print say">
+      <div className="wrap">
+        <h2>Your computers.<br />Your rules.<br /><em>One program.</em></h2>
+        <div className="cols">
+          <p>Clankr is a single program. Start it on one computer and it brings everything with it: a page where you watch your agents, an inbox for the things they ask you, and the record of what they did.</p>
+          <p>Need more room? Add another computer with one command. Laptops, office servers and rented ones all work together. Clankr is free and open source, and it runs where you put it.</p>
+          <a className="inkbtn" href={ADR}>Read how it's built</a>
+        </div>
       </div>
     </section>
   )
 }
 
-/* ── quick start ──────────────────────────────────────────── */
-
 const QS: [string, string, string][] = [
-  ["Build", "Linux and Rust. Keep clankr and kennel side by side.", "cd kennel && cargo build\ncd ../clankr && cargo build"],
-  ["Start the plane", "Makes its own Postgres, CA and tokens on first run.", "./target/debug/clankrd --dev\n# https://127.0.0.1:7600"],
-  ["Join a node", "Any Linux box. Start with the one you're on.", "clankr-node --server https://127.0.0.1:7600 \\\n  --join-token \"$(cat ~/.config/clankr/join-token)\""],
-  ["Run something", "A mock provider, so no API key is needed.", "clank apply -f hello.yaml\nclank run start hello -n demo"],
+  ["Get it", "Download Clankr and build it. You need a Linux computer with Rust.", "cd kennel && cargo build\ncd ../clankr && cargo build"],
+  ["Switch it on", "It sets itself up the first time. There is nothing to fill in.", "./target/debug/clankrd --dev\n# https://127.0.0.1:7600"],
+  ["Add a computer", "Start with the one you are on. Add more whenever you like.", "clankr-node --server https://127.0.0.1:7600 \\\n  --join-token \"$(cat ~/.config/clankr/join-token)\""],
+  ["Give an agent a job", "The sample agent uses a pretend AI, so you need no account anywhere.", "clank apply -f hello.yaml\nclank run start hello -n demo"],
 ]
 
 function Start() {
   return (
-    <section id="start" className="sec" style={{ paddingTop: 0 }}>
+    <section id="start" className="sec print start">
       <div className="wrap">
         <div className="head">
-          <Up><span className="label">Quick start</span><h2>Running by <em>this afternoon.</em></h2></Up>
-          <Up delay={0.1}><p className="lede">Four steps on a laptop. The README has every option, including gVisor, microVMs and multi-node clusters.</p></Up>
+          <h2>Get started</h2>
+          <p className="lede">Four steps. By the end you will have watched your first agent finish a job.</p>
         </div>
-        <div className="qs">
+        <ol>
           {QS.map(([t, p, code], i) => (
-            <Up key={t} delay={i * 0.08} className="plate"><span className="n">{i + 1}</span><h3>{t}</h3><p>{p}</p><pre>{code}</pre></Up>
+            <li key={t}><span aria-hidden="true">{i + 1}</span><div><h3>{t}</h3><p>{p}</p></div><pre>{code}</pre></li>
           ))}
-        </div>
+        </ol>
       </div>
     </section>
   )
 }
 
+function Closing() {
+  return (
+    <footer>
+      <div className="wrap">
+        <div className="continue">
+          <div>
+            <h2>Put your agents <em>to work.</em></h2>
+            <p className="lede">Set Clankr up on one computer and give your first agent a job. It is free, and it runs on machines you already have.</p>
+            <div className="row">
+              <a className="btn" href="#start"><Play />Get started</a>
+              <a className="btn o" href={GITHUB}>See it on GitHub</a>
+            </div>
+          </div>
+          <Lockbot size={210} />
+        </div>
+        <div className="credits">
+          <span>Clankr 0.1.0 · free and open source</span>
+          <nav><a href={GITHUB}>GitHub</a><a href={`${GITHUB}#readme`}>Guide</a><a href={ADR}>How it's built</a></nav>
+        </div>
+      </div>
+    </footer>
+  )
+}
+
 export function App() {
-  const [scrolled, setScrolled] = useState(false)
-  const { scrollY } = useScroll()
-  useMotionValueEvent(scrollY, "change", v => setScrolled(v > 40))
   return (
     <>
-      <nav className={`nav ${scrolled ? "on" : ""}`}>
+      <nav className="nav">
         <div className="wrap">
-          <a className="wm" href="#"><Lockbot />Clankr</a>
-          <a className="x" href="#how">How it runs</a>
-          <a className="x" href="#start">Quick start</a>
-          <a className="x" href={`${GITHUB}/tree/main/docs/adr`}>Design notes</a>
-          <a className="gh" href={GITHUB}>GitHub ↗</a>
+          <a className="wm" href="#"><Lockbot size={30} />Clankr</a>
+          <a className="x" href="#how">How it works</a>
+          <a className="x" href="#demos">Clips</a>
+          <a className="x" href="#start">Get started</a>
+          <a className="gh" href={GITHUB}>GitHub</a>
         </div>
       </nav>
       <main>
         <Hero />
-        <Strip />
-        <Plates />
-        <Films />
-        <Replay />
-        <Say />
+        <Problem />
+        <Clips />
+        <Record />
+        <Why />
         <Start />
       </main>
-      <footer>
-        <div className="wrap">
-          <span>Clankr · Apache-2.0 · Rust · one binary on Postgres</span>
-          <nav><a href={GITHUB}>GitHub</a><a href={`${GITHUB}#readme`}>README</a><a href={`${GITHUB}/tree/main/docs/adr`}>ADRs</a></nav>
-        </div>
-      </footer>
+      <Closing />
     </>
   )
 }

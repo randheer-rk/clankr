@@ -1,80 +1,22 @@
-import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion"
-import { clamp, Lower, Stage, Sweep, t, Words } from "./kit"
+import { useCurrentFrame, useVideoConfig } from 'remotion'
+import { C, EventBar, mono, panel, Stage, t } from './kit'
 
-export const ASK_FRAMES = 360
+export const ASK_FRAMES = 390
 
 export function AskFirst() {
-  const f = useCurrentFrame()
-  const { fps } = useVideoConfig()
-  const fadeIn = t(f, 0, 24), fadeOut = 1 - t(f, 336, 360)
-  // the card rises out of the dark, tilted, and settles
-  const rise = spring({ frame: f - 30, fps, config: { damping: 18, stiffness: 70, mass: 1.1 } })
-  // the press: a ring fills while the button is held
-  const hold = interpolate(f, [128, 176], [0, 1], clamp)
-  const pressed = f >= 128 && f < 180
-  const done = f >= 176
-  const stamp = spring({ frame: f - 186, fps, config: { damping: 11, stiffness: 160 } })
-  const leave = t(f, 268, 316)
-  const entry = t(f, 284, 312)
-
-  return (
-    <Stage glow="#2b2238" x={50} y={46}>
-      <AbsoluteFill style={{ opacity: fadeIn * fadeOut }}>
-        <AbsoluteFill style={{ perspective: 1600 }}>
-          <div style={{
-            position: "absolute", left: "50%", top: 150, width: 760, marginLeft: -380,
-            transform: `translateY(${(1 - rise) * 420 - leave * 90}px) rotateX(${(1 - rise) * 38 + leave * 8}deg) rotateY(${(1 - rise) * -12}deg) scale(${1 - leave * 0.18})`,
-            opacity: rise * (1 - leave * 0.55),
-          }}>
-            <div style={{ position: "relative", borderRadius: 40, padding: "40px 44px 38px", overflow: "hidden", border: "1.5px solid rgba(255,255,255,.2)",
-              background: "linear-gradient(160deg, rgba(255,255,255,.12), rgba(255,255,255,.03) 55%, rgba(190,160,255,.05))", boxShadow: "0 80px 140px -50px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.28)" }}>
-              <Sweep at={70} dur={60} strength={0.16} />
-              <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 22, color: "rgba(245,243,239,.6)" }}>
-                <span style={{ width: 44, height: 44, borderRadius: 14, display: "grid", placeItems: "center", background: "rgba(255,122,61,.16)", color: "#ffb37a", fontWeight: 700 }}>T</span>
-                Tool call · publish.post
-                <span style={{ marginLeft: "auto", fontFamily: "'JetBrains Mono', monospace", fontSize: 18, opacity: 1 - Math.min(1, stamp * 2) }}>09:44</span>
-              </div>
-              <div style={{ fontSize: 46, fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1.1, marginTop: 22 }}>Publish “Spring update”<br />to the company blog</div>
-              <div style={{ marginTop: 18, fontSize: 22, color: "rgba(245,243,239,.55)", lineHeight: 1.45 }}>1,840 words · reviewed by blog/reviewer · 1 fix applied</div>
-              <div style={{ display: "flex", gap: 14, marginTop: 34 }}>
-                <div style={{ position: "relative", flex: 1, height: 72, borderRadius: 22, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", gap: 14, fontSize: 25, fontWeight: 600,
-                  background: done ? "#2f8f5b" : "#f5f3ef", color: done ? "#f5f3ef" : "#111", transform: `scale(${pressed ? 0.97 : 1})`, transition: "none" }}>
-                  {!done && <div style={{ position: "absolute", inset: 0, width: `${hold * 100}%`, background: "linear-gradient(90deg, #ffd3b5, #ffb37a)" }} />}
-                  <span style={{ position: "relative" }}>{done ? "✓  Approved" : pressed ? "Keep holding…" : "Hold to approve"}</span>
-                </div>
-                <div style={{ width: 170, height: 72, borderRadius: 22, display: "grid", placeItems: "center", fontSize: 25, fontWeight: 600, border: "1.5px solid rgba(255,255,255,.22)", color: "rgba(245,243,239,.75)", opacity: done ? 0.3 : 1 }}>Not now</div>
-              </div>
-              {/* the stamp: who allowed it, and when */}
-              <div style={{ position: "absolute", right: 30, top: 30, padding: "8px 16px", borderRadius: 14, border: "3px solid #8fe0ad", color: "#8fe0ad", fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 600, letterSpacing: ".08em",
-                opacity: Math.min(1, stamp * 1.4), transform: `rotate(-4deg) scale(${2.2 - stamp * 1.2})` }}>APPROVED · ops@ · 09:46</div>
-            </div>
-          </div>
-          {/* the press, seen as a soft ring of light where a finger would be */}
-          {f >= 120 && f < 186 && (
-            <div style={{ position: "absolute", left: 662, top: 465, width: 90, height: 90, borderRadius: "50%", border: "2px solid rgba(255,211,181,.8)", boxShadow: "0 0 40px rgba(255,179,122,.5)",
-              opacity: interpolate(f, [120, 130, 176, 186], [0, 1, 1, 0], clamp), transform: `scale(${0.8 + hold * 0.25})` }} />
-          )}
-        </AbsoluteFill>
-
-        {/* the answer goes into the logbook */}
-        <div style={{ position: "absolute", left: "50%", top: 546, width: 760, marginLeft: -380, display: "flex", gap: 26, alignItems: "center", padding: "20px 30px", borderRadius: 22,
-          background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.12)", opacity: entry * (1 - t(f, 326, 340)), transform: `translateY(${(1 - entry) * 24}px)` }}>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 21, color: "rgba(245,243,239,.45)" }}>09:46</span>
-          <span style={{ width: 11, height: 11, borderRadius: 6, background: "#8fe0ad", boxShadow: "0 0 14px #8fe0ad" }} />
-          <span style={{ fontSize: 26, fontFamily: "'JetBrains Mono', monospace" }}>approval.granted  ops@  "LGTM"  → audit #14,212</span>
-        </div>
-
-        <div style={{ position: "absolute", left: 0, right: 0, top: 70 }}>
-          <Words text="Some tools need a yes." at={8} size={52} out={110} />
-        </div>
-        <div style={{ position: "absolute", left: 0, right: 0, top: 70 }}>
-          <Words text="From a person." at={190} size={52} out={262} />
-        </div>
-        <div style={{ position: "absolute", left: 0, right: 0, top: 660 }}>
-          <Words text="Gated." at={300} size={110} head />
-        </div>
-        <Lower text="Approval-gated tools wait in an inbox. The answer lands in the audit log." at={318} style={{ top: 774 }} />
-      </AbsoluteFill>
-    </Stage>
-  )
+  const f = useCurrentFrame(), { width } = useVideoConfig(), compact = width < 1000
+  const phase = f < 150 ? 0 : f < 255 ? 1 : 2
+  const approved = phase > 0
+  return <Stage title="Some actions need a person." subtitle="The agent waits. The decision is kept on record." phase={phase} phases={['Request', 'Approve', 'Record']}>
+    <div style={{ ...panel, position: 'absolute', left: compact ? 48 : 72, top: compact ? 245 : 250, width: compact ? 704 : 880, height: compact ? 425 : 420, padding: 30 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: mono, fontSize: compact ? 23 : 22, color: C.yellow }}><span>Publish post</span><span style={{ fontSize: compact ? 20 : 18, color: approved ? C.blue : C.muted }}>{approved ? '✓ APPROVED' : 'AWAITING REVIEW'}</span></div>
+      <div style={{ fontSize: compact ? 42 : 48, lineHeight: 1.15, fontWeight: 550, letterSpacing: -1.5, marginTop: 20 }}>Publish the weekly update</div>
+      <div style={{ fontSize: compact ? 25 : 26, lineHeight: 1.5, color: approved ? C.blue : C.muted, marginTop: 18 }}>{approved ? '“Reviewed and ready to publish.”' : 'Approver group: editors · Waiting for a decision'}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 25, marginTop: 24 }}><div style={{ padding: compact ? '17px 28px' : '15px 30px', background: approved ? C.blue : C.text, color: C.card, borderRadius: 8, fontSize: compact ? 27 : 26, transform: `scale(${1 - .025 * Math.sin(t(f, 142, 158) * Math.PI)})` }}>{approved ? '✓ Approved' : 'Approve'}</div><span style={{ color: C.muted, fontSize: compact ? 24 : 23 }}>{approved ? 'by editor' : 'Reject'}</span></div>
+    </div>
+    <div style={{ position: 'absolute', left: compact ? 48 : 1055, right: 72, top: compact ? 705 : 290, display: 'flex', flexDirection: compact ? 'row' : 'column', gap: compact ? 24 : 42 }}>
+      {['Agent asks', 'Human approved', 'Audit recorded'].map((label, i) => <div key={label} style={{ display: 'flex', alignItems: 'center', gap: compact ? 12 : 20, opacity: i <= phase ? 1 : .4 }}><span style={{ width: compact ? 36 : 46, height: compact ? 36 : 46, borderRadius: '50%', display: 'grid', placeItems: 'center', flex: 'none', border: `2px solid ${i <= phase ? C.blue : C.line}`, background: i <= phase ? C.blue : 'transparent', color: i <= phase ? C.card : C.muted, fontSize: compact ? 23 : 25 }}>{i <= phase ? '✓' : i + 1}</span><span style={{ fontSize: compact ? 23 : 29, fontWeight: 500 }}>{compact ? ['Requested', 'Approved', 'Recorded'][i] : label}</span></div>)}
+    </div>
+    <EventBar event={phase === 0 ? 'Approval requested' : phase === 1 ? 'Approval given' : 'Workflow continued'} detail={compact ? '' : phase === 0 ? 'waiting for editors' : phase === 1 ? 'actor: editor' : 'decision recorded'} success={approved} />
+  </Stage>
 }

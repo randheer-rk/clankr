@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>C · Foundry</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--iron:#1c1d1a;--steel:#2a2c28;--rust:#ff5f1f;--cream:#efe9dc;--mute:#9a978c;--line:#3a3c37;--mono:"JetBrains Mono",monospace;--sans:"Instrument Sans",sans-serif;--head:"Archivo",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--iron);color:var(--cream);font:17px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+.nav{display:flex;align-items:center;padding:22px 48px;gap:32px;font:500 14px var(--mono);text-transform:uppercase;letter-spacing:.1em}
+.nav .wm{font:900 26px var(--head);letter-spacing:-.03em;text-transform:none;margin-right:auto;display:flex;align-items:center;gap:12px}
+.nav .wm svg{width:28px}
+.hero{padding:60px 48px 40px;display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:end;min-height:72vh}
+h1{font:900 clamp(60px,8vw,118px)/.9 var(--head);letter-spacing:-.045em;margin:0;text-transform:uppercase}
+h1 em{font-style:normal;color:var(--rust)}
+.sub{font-size:21px;color:var(--mute);max-width:520px;margin:28px 0 0}
+.sub b{color:var(--cream);font-weight:500}
+.bot{position:relative;align-self:stretch;display:flex;align-items:center;justify-content:center}
+.bot svg{width:360px;filter:drop-shadow(0 30px 40px rgba(0,0,0,.5))}
+.bot .tag{position:absolute;right:0;top:10px;font:12px var(--mono);color:var(--mute);text-align:right;line-height:1.7}
+.bot .tag b{color:var(--rust);font-weight:500}
+.strip{display:flex;border-top:2px solid var(--cream);border-bottom:2px solid var(--cream);margin:40px 48px 0;font:500 13px var(--mono);text-transform:uppercase;letter-spacing:.12em}
+.strip span{padding:16px 24px;border-right:1px solid var(--line);flex:1;text-align:center}
+.strip span:last-child{border-right:0}
+.strip i{color:var(--rust);font-style:normal;margin-right:8px}
+/* plates */
+.plates{padding:90px 48px;display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.plate{background:var(--steel);border-radius:4px;padding:34px 32px 30px;position:relative;border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
+.plate::before,.plate::after{content:"";position:absolute;width:7px;height:7px;border-radius:50%;background:var(--iron);box-shadow:inset 0 1px 1px rgba(0,0,0,.8),0 1px 0 rgba(255,255,255,.08);top:12px;left:12px}
+.plate::after{left:auto;right:12px}
+.plate .k{font:500 12px var(--mono);letter-spacing:.14em;color:var(--rust);text-transform:uppercase}
+.plate h3{font:700 30px/1 var(--head);letter-spacing:-.03em;margin:14px 0 14px;text-transform:uppercase}
+.plate p{margin:0;color:var(--mute);font-size:16px}
+.plate pre{margin:22px 0 0;font:13px/1.6 var(--mono);color:var(--cream);background:var(--iron);padding:14px 16px;border-radius:3px;border-left:3px solid var(--rust)}
+/* manifesto */
+.say{padding:40px 48px 110px;display:grid;grid-template-columns:1fr 1fr;gap:60px;border-top:1px solid var(--line)}
+.say h2{font:900 56px/.95 var(--head);letter-spacing:-.04em;text-transform:uppercase;margin:0}
+.say p{color:var(--mute);margin:0 0 18px;font-size:18px}
+.say p b{color:var(--cream);font-weight:500}
+.say .cta{display:inline-block;margin-top:10px;background:var(--rust);color:#1c1d1a;font:700 15px var(--head);text-transform:uppercase;letter-spacing:.06em;padding:16px 24px;border-radius:3px}
+</style></head><body>
+<nav class="nav"><a class="wm"><svg viewBox="8 6 104 112"><path d="M37 50V37a23 23 0 0 1 46 0v13" fill="none" stroke="#efe9dc" stroke-width="8"/><rect x="16" y="50" width="88" height="60" rx="26" fill="none" stroke="#efe9dc" stroke-width="8"/><rect x="44" y="71" width="8" height="19" rx="4" fill="#ff5f1f"/><rect x="68" y="71" width="8" height="19" rx="4" fill="#ff5f1f"/></svg>Clankr</a><a>Docs</a><a>SDKs</a><a>Design notes</a><a>GitHub ↗</a></nav>
+
+<section class="hero">
+  <div>
+    <h1>Agents that<br>work <em>shifts,</em><br>not demos.</h1>
+    <p class="sub">Clankr runs your AI agents like a plant runs machines: each one <b>sandboxed on a node</b>, every step <b>logged before it happens</b>, every key <b>kept at the gate</b>. When a machine fails, the job carries on. When a tool needs sign-off, it waits for you.</p>
+  </div>
+  <div class="bot">
+    <svg viewBox="8 6 104 112"><path d="M37 50V37a23 23 0 0 1 46 0v13" fill="none" stroke="#efe9dc" stroke-width="8"/><rect x="16" y="50" width="88" height="60" rx="26" fill="none" stroke="#efe9dc" stroke-width="8"/><rect x="44" y="71" width="8" height="19" rx="4" fill="#ff5f1f"/><rect x="68" y="71" width="8" height="19" rx="4" fill="#ff5f1f"/></svg>
+    <div class="tag">MODEL <b>LOCKBOT</b><br>RUST · POSTGRES · ONE BINARY<br>SER. NO. <b>0.1.0</b></div>
+  </div>
+</section>
+<div class="strip"><span><i>■</i>Durable workflows</span><span><i>■</i>Sandboxed runtimes</span><span><i>■</i>Brokered credentials</span><span><i>■</i>Human approvals</span><span><i>■</i>Audit, off-site</span></div>
+
+<section class="plates">
+  <div class="plate"><div class="k">Plate 01</div><h3>It picks up where it fell.</h3><p>Every workflow step is an event in Postgres, committed together with the work it schedules. A node dies, the run moves, and resumes at the last line. No model is ever called twice.</p><pre>#15 node.lost        eu-1
+#16 step.resumed     draft ← #14</pre></div>
+  <div class="plate"><div class="k">Plate 02</div><h3>Keys stay at the gate.</h3><p>Agents name a claim; the gateway on their node holds the real key, reserves budget before the call and settles after. A runaway loop hits the budget, not your card.</p><pre>ModelClaim default → anthropic
+budget: blog/monthly  ▮▮▮▮▮▯▯ 71%</pre></div>
+  <div class="plate"><div class="k">Plate 03</div><h3>Some levers need a hand.</h3><p>Mark a tool as approval-gated and the run parks in an inbox until a person says yes. The decision, and who made it, goes in the hash-chained audit log.</p><pre>$ clank approve a-91c2 --reason "ship it"
+audit #14,212 ✓ sealed</pre></div>
+</section>
+
+<section class="say">
+  <h2>No Kubernetes.<br>No Temporal.<br>One binary.</h2>
+  <div>
+    <p><b>clankrd</b> is the whole control plane: API, scheduler, workflow engine, gateway, inbox and web UI, on a Postgres you already know how to back up. <b>clankr-node</b> is a small daemon on each machine that dials in over mTLS and runs agents under <b>kennel</b>, in containers, gVisor, or Firecracker microVMs.</p>
+    <p>Write agents in Python, TypeScript or Go with an SDK that hands you work and messages. Describe them in YAML. <code>clank apply</code>. That's the job.</p>
+    <a class="cta">Build it in an afternoon →</a>
+  </div>
+</section>
+</body></html>

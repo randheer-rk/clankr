@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · Premium (Stripe / Mercury)</title>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<style>
+  :root { --bg: #F6F7F9; --card: #fff; --line: #E7E9EE; --tx: #1A1F36; --tx2: #5A6275; --tx3: #8D94A5; --accent: #0E6E5C; --accent-2: #12A386; --amber: #C9730E; --amber-bg: #FFF3E0; --blue: #3B6FE0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1440px; height: 900px; overflow: hidden; background: var(--bg); color: var(--tx); font: 14px/1.45 "Hanken Grotesk", sans-serif; -webkit-font-smoothing: antialiased; display: grid; grid-template-columns: 240px 1fr; }
+  svg.lucide { width: 17px; height: 17px; stroke-width: 1.8; flex: none; }
+  .side { padding: 20px 14px; display: flex; flex-direction: column; gap: 2px; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px; font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+  .brand .lg { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: #fff; display: grid; place-items: center; box-shadow: 0 1px 2px rgba(14,110,92,.4), inset 0 1px 0 rgba(255,255,255,.2); }
+  .it { display: flex; align-items: center; gap: 11px; padding: 8px 10px; border-radius: 8px; color: var(--tx2); font-weight: 500; }
+  .it svg { color: var(--tx3); }
+  .it.on { background: #fff; color: var(--tx); box-shadow: 0 1px 2px rgba(26,31,54,.06), 0 0 0 1px var(--line); }
+  .it.on svg { color: var(--accent); }
+  .it .c { margin-left: auto; font-size: 12px; font-weight: 600; background: var(--amber-bg); color: var(--amber); padding: 1px 7px; border-radius: 10px; }
+  .grp { font-size: 12px; color: var(--tx3); font-weight: 600; padding: 18px 10px 6px; }
+  .main { display: flex; flex-direction: column; min-width: 0; padding: 14px 14px 14px 0; }
+  .sheet { flex: 1; background: var(--card); border-radius: 16px; box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(26,31,54,.05); overflow: hidden; position: relative; }
+  .hdr { height: 60px; display: flex; align-items: center; gap: 12px; padding: 0 28px; border-bottom: 1px solid var(--line); }
+  .search { display: flex; align-items: center; gap: 8px; color: var(--tx3); width: 360px; }
+  .hdr .r { margin-left: auto; display: flex; align-items: center; gap: 14px; color: var(--tx2); }
+  .av { width: 30px; height: 30px; border-radius: 50%; background: #E3DED7; display: grid; place-items: center; font-weight: 600; font-size: 12px; color: #5B4F42; }
+  .page { padding: 26px 28px; }
+  .ph { display: flex; align-items: flex-end; justify-content: space-between; }
+  .ph h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  .ph p { color: var(--tx2); margin-top: 2px; }
+  .seg { display: flex; gap: 4px; background: #F1F2F5; border-radius: 9px; padding: 3px; }
+  .seg span { padding: 5px 12px; border-radius: 7px; color: var(--tx2); font-weight: 500; font-size: 13px; }
+  .seg span.on { background: #fff; color: var(--tx); box-shadow: 0 1px 2px rgba(26,31,54,.1); }
+  .kpis { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr; gap: 0; margin-top: 22px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .kpi { padding: 18px 20px; border-left: 1px solid var(--line); }
+  .kpi:first-child { border-left: 0; }
+  .kpi .l { color: var(--tx2); font-weight: 500; font-size: 13px; display: flex; justify-content: space-between; }
+  .kpi b { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; display: block; margin-top: 4px; }
+  .kpi b small { font-size: 14px; color: var(--tx3); font-weight: 500; }
+  .kpi .d { font-size: 12.5px; color: var(--accent-2); font-weight: 600; }
+  .chart { margin-top: 6px; }
+  .table { margin-top: 24px; }
+  .thead, .tr { display: grid; grid-template-columns: 1.7fr 1.1fr 1fr .8fr .7fr; align-items: center; padding: 0 12px; }
+  .thead { color: var(--tx3); font-size: 12.5px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .tr { height: 54px; border-bottom: 1px solid #F0F1F4; }
+  .tr.on { background: #F8FAFF; box-shadow: inset 3px 0 0 var(--blue); }
+  .tr b { font-weight: 600; display: block; }
+  .tr small { color: var(--tx3); font-size: 12.5px; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 3px 9px; border-radius: 6px; }
+  .badge i { width: 6px; height: 6px; border-radius: 50%; }
+  .tr .n { font-variant-numeric: tabular-nums; }
+  /* drawer */
+  .scrim { position: absolute; inset: 0; background: rgba(26,31,54,.18); }
+  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 470px; background: #fff; box-shadow: -24px 0 60px -12px rgba(26,31,54,.22), -1px 0 0 var(--line); display: flex; flex-direction: column; }
+  .dh { padding: 22px 26px 18px; border-bottom: 1px solid var(--line); }
+  .dh .top { display: flex; justify-content: space-between; color: var(--tx3); }
+  .dh h2 { font-size: 21px; font-weight: 700; letter-spacing: -0.015em; margin-top: 10px; }
+  .dh p { color: var(--tx2); margin-top: 4px; }
+  .db { padding: 22px 26px; flex: 1; }
+  .quote { background: linear-gradient(180deg, #FBFAF7, #F7F5F0); border: 1px solid #ECE7DD; border-radius: 12px; padding: 16px 18px; font-size: 15.5px; line-height: 1.55; color: #2C2A26; }
+  .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+  .fact { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; gap: 10px; align-items: center; }
+  .fact .fi { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; }
+  .fact b { display: block; font-weight: 600; }
+  .fact small { color: var(--tx3); }
+  .steps { margin-top: 20px; }
+  .steps h4 { font-size: 13px; color: var(--tx2); font-weight: 600; margin-bottom: 10px; }
+  .stp { display: flex; align-items: center; gap: 0; }
+  .stp .s { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12px; color: var(--tx2); width: 66px; }
+  .stp .s i.c { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; }
+  .stp .s i.c svg { width: 14px; height: 14px; stroke-width: 2.6; }
+  .stp .ln { flex: 1; height: 2px; background: var(--accent-2); margin-bottom: 20px; }
+  .ta { margin-top: 20px; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; color: var(--tx3); height: 74px; }
+  .df { padding: 16px 26px; border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
+  .df .hint { color: var(--tx3); font-size: 12.5px; margin-right: auto; display: flex; gap: 6px; align-items: center; }
+  .btn { white-space: nowrap; padding: 9px 16px; border-radius: 8px; font-weight: 600; }
+  .btn.g { box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(26,31,54,.06); }
+  .btn.p { background: var(--accent); color: #fff; box-shadow: 0 1px 2px rgba(14,110,92,.35), inset 0 1px 0 rgba(255,255,255,.18); }
+</style>
+</head>
+<body>
+<aside class="side">
+  <div class="brand"><span class="lg"><i data-lucide="sparkle" style="width:15px;height:15px;stroke-width:2.4"></i></span>Clankr</div>
+  <div class="it"><i data-lucide="house"></i>Home</div>
+  <div class="it"><i data-lucide="inbox"></i>Approvals<span class="c">3</span></div>
+  <div class="it on"><i data-lucide="activity"></i>Runs</div>
+  <div class="it"><i data-lucide="bot"></i>Agents</div>
+  <div class="it"><i data-lucide="git-fork"></i>Workflows</div>
+  <div class="grp">Money &amp; limits</div>
+  <div class="it"><i data-lucide="wallet"></i>Budgets</div>
+  <div class="it"><i data-lucide="receipt"></i>Spend</div>
+  <div class="grp">Settings</div>
+  <div class="it"><i data-lucide="users"></i>Team &amp; access</div>
+  <div class="it"><i data-lucide="shield"></i>Audit log</div>
+  <div class="it"><i data-lucide="server"></i>Infrastructure</div>
+</aside>
+<div class="main">
+  <div class="sheet">
+    <div class="hdr"><div class="search"><i data-lucide="search"></i>Search runs, agents, approvals</div><div class="r"><i data-lucide="bell"></i><i data-lucide="circle-help"></i><span class="av">AN</span></div></div>
+    <div class="page">
+      <div class="ph"><div><h1>Runs</h1><p>Research workspace · last 7 days</p></div><div class="seg"><span>24h</span><span class="on">7d</span><span>30d</span></div></div>
+      <div class="kpis">
+        <div class="kpi"><div class="l"><span>Model spend</span><span class="d">−8% vs last week</span></div><b>$64.20</b>
+          <svg class="chart" width="100%" height="56" viewBox="0 0 400 56" preserveAspectRatio="none"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#12A386" stop-opacity=".22"/><stop offset="1" stop-color="#12A386" stop-opacity="0"/></linearGradient></defs><path d="M0 40 C 30 36, 50 22, 80 26 S 130 40, 160 30 S 220 10, 250 18 S 310 34, 340 22 S 380 12, 400 14 L400 56 L0 56Z" fill="url(#g)"/><path d="M0 40 C 30 36, 50 22, 80 26 S 130 40, 160 30 S 220 10, 250 18 S 310 34, 340 22 S 380 12, 400 14" fill="none" stroke="#12A386" stroke-width="2"/></svg></div>
+        <div class="kpi"><div class="l">Runs</div><b>186</b><span class="d">97% succeeded</span></div>
+        <div class="kpi"><div class="l">Waiting on people</div><b>3 <small>approvals</small></b><span class="d" style="color:var(--amber)">oldest 2h</span></div>
+        <div class="kpi"><div class="l">Recovered</div><b>11 <small>retries</small></b><span class="d">0 work lost</span></div>
+      </div>
+      <div class="table">
+        <div class="thead"><span>Run</span><span>Status</span><span>Started by</span><span>Duration</span><span style="text-align:right">Cost</span></div>
+        <div class="tr on"><div><b>Research report on durable execution</b><small>research-report · 1184faf4</small></div><span><span class="badge" style="background:var(--amber-bg);color:var(--amber)"><i style="background:var(--amber)"></i>Needs approval</span></span><span>CI pipeline</span><span class="n">4m 12s</span><span class="n" style="text-align:right">$0.84</span></div>
+        <div class="tr"><div><b>Nightly digest</b><small>nightly-digest · 7d41aa02</small></div><span><span class="badge" style="background:var(--amber-bg);color:var(--amber)"><i style="background:var(--amber)"></i>Needs approval</span></span><span>Schedule</span><span class="n">12m 40s</span><span class="n" style="text-align:right">$2.10</span></div>
+        <div class="tr"><div><b>Triage support inbox</b><small>triage-inbox · c90f3d5e</small></div><span><span class="badge" style="background:#EAF1FF;color:var(--blue)"><i style="background:var(--blue)"></i>Running</span></span><span>Ana Nakamura</span><span class="n">48s</span><span class="n" style="text-align:right">$0.06</span></div>
+        <div class="tr"><div><b>Research report on vector stores</b><small>research-report · 51aa2c70</small></div><span><span class="badge" style="background:#E6F6F1;color:var(--accent)"><i style="background:var(--accent-2)"></i>Published</span></span><span>CI pipeline</span><span class="n">6m 02s</span><span class="n" style="text-align:right">$0.92</span></div>
+        <div class="tr"><div><b>Nightly digest</b><small>nightly-digest · a3c8e911</small></div><span><span class="badge" style="background:#FDECEC;color:#C2392F"><i style="background:#C2392F"></i>Failed</span></span><span>Schedule</span><span class="n">9m 15s</span><span class="n" style="text-align:right">$1.74</span></div>
+      </div>
+    </div>
+    <div class="scrim"></div>
+    <aside class="drawer">
+      <div class="dh"><div class="top"><span>Approval · Editors</span><span style="display:flex;gap:14px"><i data-lucide="maximize-2"></i><i data-lucide="x"></i></span></div><h2>Publish “Research report on durable execution”?</h2><p>Requested by the CI pipeline · closes in 2 days</p></div>
+      <div class="db">
+        <div class="quote">“Durable execution means the workflow’s progress survives worker loss, so retries pick up where they left off.”</div>
+        <div class="facts">
+          <div class="fact"><span class="fi" style="background:#E6F6F1;color:var(--accent)"><i data-lucide="badge-check"></i></span><div><b>Verified</b><small>by Verifier agent</small></div></div>
+          <div class="fact"><span class="fi" style="background:var(--amber-bg);color:var(--amber)"><i data-lucide="flag"></i></span><div><b>2 of 12 sources</b><small>low confidence</small></div></div>
+        </div>
+        <div class="steps"><h4>Progress</h4>
+          <div class="stp">
+            <div class="s"><i class="c" style="background:var(--accent-2)"><i data-lucide="check"></i></i>Plan</div><div class="ln"></div>
+            <div class="s"><i class="c" style="background:var(--accent-2)"><i data-lucide="check"></i></i>Research</div><div class="ln"></div>
+            <div class="s"><i class="c" style="background:var(--accent-2)"><i data-lucide="check"></i></i>Verify</div><div class="ln"></div>
+            <div class="s"><i class="c" style="background:var(--amber)"><i data-lucide="hand"></i></i>Review</div><div class="ln" style="background:var(--line)"></div>
+            <div class="s"><i class="c" style="background:#fff;box-shadow:0 0 0 1.5px var(--line);color:var(--tx3)"><i data-lucide="send"></i></i>Publish</div>
+          </div>
+        </div>
+        <div class="ta">Add a note (saved with your decision)</div>
+      </div>
+      <div class="df"><span class="hint"><i data-lucide="lock" style="width:14px;height:14px"></i>Applies to this exact version</span><span class="btn g">Send back</span><span class="btn p">Approve &amp; publish</span></div>
+    </aside>
+  </div>
+</div>
+<script>lucide.createIcons();</script>
+</body>
+</html>

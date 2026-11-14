@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/clankr-dark.svg">
-    <img alt="clankr" src="docs/assets/clankr-light.svg" width="300">
-  </picture>
+  <img alt="Clankr: AI agents you can leave running" src="docs/assets/readme-banner.png" width="1000">
 </p>
 
 <p align="center">

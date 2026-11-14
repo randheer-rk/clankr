@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · Budgets</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<link rel="stylesheet" href="vision.css">
+<style>
+  .win { grid-template-columns: 248px 1fr; }
+  .page { padding: 24px 34px; overflow: hidden; }
+  .hero { display: grid; grid-template-columns: 1fr 300px; gap: 16px; margin-top: 18px; }
+  .big { font-size: 34px; font-weight: 700; letter-spacing: -0.03em; }
+  .big small { font-size: 15px; color: var(--ink-3); font-weight: 500; letter-spacing: 0; }
+  .lbl { color: var(--ink-2); font-weight: 500; }
+  .legend { display: flex; gap: 14px; color: var(--ink-2); font-size: 12px; }
+  .legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: 3px; }
+  .bud { display: flex; flex-direction: column; gap: 14px; }
+  .bcard .top { display: flex; justify-content: space-between; align-items: center; }
+  .bcard .nm { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .bcard .nm .ic { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: #fff; }
+  .bcard .nm .ic svg { width: 14px; height: 14px; }
+  .bcard .per { color: var(--ink-3); font-size: 12px; }
+  .bcard .vals { display: flex; justify-content: space-between; margin-top: 12px; align-items: baseline; }
+  .bcard .vals b { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+  .bcard .vals b small { font-size: 12px; color: var(--ink-3); font-weight: 500; }
+  .bcard .meter { height: 8px; }
+  .bcard .sub { display: flex; justify-content: space-between; color: var(--ink-3); font-size: 12px; margin-top: 6px; }
+  .lower { display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; margin-top: 16px; }
+  .q { display: grid; grid-template-columns: 26px 1fr 140px 64px; gap: 12px; align-items: center; padding: 9px 0; border-top: .5px solid var(--sep); }
+  .q:first-of-type { border-top: 0; }
+  .q .qi { width: 26px; height: 26px; border-radius: 7px; background: #F2F2F7; display: grid; place-items: center; color: var(--ink-2); }
+  .q .qi svg { width: 14px; height: 14px; }
+  .q b { font-weight: 500; }
+  .q small { display: block; color: var(--ink-3); font-size: 12px; }
+  .q .n { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .q .n small { display: inline; font-weight: 500; }
+  .stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; margin-top: 14px; gap: 2px; }
+  .claim { display: grid; grid-template-columns: 12px 1fr auto auto; gap: 10px; align-items: center; padding: 9px 0; border-top: .5px solid var(--sep); }
+  .claim:first-of-type { border-top: 0; margin-top: 8px; }
+  .claim i { width: 10px; height: 10px; border-radius: 3px; }
+  .claim small { color: var(--ink-3); }
+  .claim b { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+</style>
+</head>
+<body>
+<div class="win">
+  <aside class="side">
+    <div class="ws"><div class="logo"><i data-lucide="bot"></i></div><div><b>Research</b><span>clankr · 2 nodes</span></div></div>
+    <div class="it"><i data-lucide="inbox"></i>Inbox<span class="c hot">3</span></div>
+    <div class="it"><i data-lucide="play-circle"></i>Runs<span class="c">14</span></div>
+    <div class="it"><i data-lucide="sparkles"></i>Agents<span class="c">6</span></div>
+    <div class="it"><i data-lucide="workflow"></i>Workflows<span class="c">4</span></div>
+    <div class="grp">Govern</div>
+    <div class="it on"><i data-lucide="gauge"></i>Budgets</div>
+    <div class="it"><i data-lucide="users"></i>People &amp; access</div>
+    <div class="it"><i data-lucide="scroll-text"></i>Audit log</div>
+    <div class="grp">Workspaces</div>
+    <div class="it"><span class="dot" style="background:#0A84FF"></span>Research</div>
+    <div class="it"><span class="dot" style="background:#30D158"></span>Support</div>
+    <div class="it"><span class="dot" style="background:#BF5AF2"></span>Growth</div>
+    <div class="me"><div class="av">AN</div><div><b style="font-weight:600">Ana Nakamura</b><div style="color:var(--ink-2);font-size:11.5px">Editor</div></div></div>
+  </aside>
+
+  <section class="detail">
+    <div class="tb"><span style="font-size:15px;font-weight:600">Budgets &amp; limits</span><div class="seg"><span>Today</span><span class="on">This month</span><span>All time</span></div><span class="b sec2" style="display:inline-flex;gap:6px;align-items:center"><i data-lucide="plus" style="width:14px;height:14px"></i>New budget</span></div>
+    <div class="page">
+      <div class="crumb"><span class="dot" style="width:9px;height:9px;border-radius:50%;background:var(--blue);display:inline-block"></span>Research workspace</div>
+      <div class="hero">
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div><div class="lbl">Model spend this month</div><div class="big">$184.60 <small>of $400</small></div><div style="color:#1E9E44;font-weight:500;font-size:12.5px;margin-top:2px">On track · forecast $352 by Nov 30</div></div>
+            <div class="legend"><span><i style="background:var(--blue)"></i>Spend</span><span><i style="background:#C7C7CC"></i>Forecast</span><span><i style="background:var(--red);height:1px"></i>Budget</span></div>
+          </div>
+          <svg width="100%" height="190" viewBox="0 0 700 190" preserveAspectRatio="none" style="margin-top:10px">
+            <defs><linearGradient id="sp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0A84FF" stop-opacity=".22"/><stop offset="1" stop-color="#0A84FF" stop-opacity="0"/></linearGradient></defs>
+            <g stroke="#F2F2F7"><path d="M0 40 H700"/><path d="M0 90 H700"/><path d="M0 140 H700"/></g>
+            <path d="M0 24 H700" stroke="#FF453A" stroke-width="1" stroke-dasharray="4 4"/>
+            <path d="M0 186 L23 180 L46 176 L70 170 L93 163 L116 159 L140 150 L163 146 L186 140 L210 131 L233 126 L256 120 L280 113 L303 106 L326 101 L350 96 L350 190 L0 190 Z" fill="url(#sp)"/>
+            <path d="M0 186 L23 180 L46 176 L70 170 L93 163 L116 159 L140 150 L163 146 L186 140 L210 131 L233 126 L256 120 L280 113 L303 106 L326 101 L350 96" fill="none" stroke="#0A84FF" stroke-width="2"/>
+            <path d="M350 96 L700 38" fill="none" stroke="#C7C7CC" stroke-width="2" stroke-dasharray="5 5"/>
+            <circle cx="350" cy="96" r="4.5" fill="#fff" stroke="#0A84FF" stroke-width="2"/>
+          </svg>
+          <div style="display:flex;justify-content:space-between;color:var(--ink-3);font-size:11.5px;margin-top:4px"><span>Nov 1</span><span>Nov 8</span><span>Nov 15 · today</span><span>Nov 22</span><span>Nov 30</span></div>
+        </div>
+        <div class="bud">
+          <div class="card bcard">
+            <div class="top"><span class="nm"><span class="ic" style="background:var(--blue)"><i data-lucide="calendar-days"></i></span>Daily cap</span><span class="per">resets 0:00 UTC</span></div>
+            <div class="vals"><b>$12.40 <small>of $25</small></b><span class="per">50%</span></div>
+            <div class="meter"><i style="width:50%;background:var(--blue)"></i></div>
+            <div class="sub"><span>611k of 1M tokens</span><span>$0.30 reserved</span></div>
+          </div>
+          <div class="card bcard">
+            <div class="top"><span class="nm"><span class="ic" style="background:var(--orange)"><i data-lucide="calendar-range"></i></span>Monthly cap</span><span class="per">Nov 1 – 30</span></div>
+            <div class="vals"><b>$184.60 <small>of $400</small></b><span class="per">46%</span></div>
+            <div class="meter"><i style="width:46%;background:var(--orange)"></i></div>
+            <div class="sub"><span>Calls stop at the cap</span><span>15 days left</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="lower">
+        <div class="card">
+          <h3>Limits<span>Resource quota · team</span></h3>
+          <div style="margin-top:6px">
+          <div class="q"><span class="qi"><i data-lucide="play"></i></span><div><b>Runs at the same time</b><small>new runs wait above this</small></div><div class="meter" style="margin:0"><i style="width:30%;background:var(--green)"></i></div><span class="n">3 <small>/ 10</small></span></div>
+          <div class="q"><span class="qi"><i data-lucide="cpu"></i></span><div><b>CPUs</b><small>across all agent deployments</small></div><div class="meter" style="margin:0"><i style="width:44%;background:var(--green)"></i></div><span class="n">3.5 <small>/ 8</small></span></div>
+          <div class="q"><span class="qi"><i data-lucide="memory-stick"></i></span><div><b>Memory</b></div><div class="meter" style="margin:0"><i style="width:81%;background:var(--orange)"></i></div><span class="n">13 <small>/ 16 GB</small></span></div>
+          <div class="q"><span class="qi"><i data-lucide="hard-drive"></i></span><div><b>Volume storage</b></div><div class="meter" style="margin:0"><i style="width:12%;background:var(--green)"></i></div><span class="n">6 <small>/ 50 GB</small></span></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Where the money goes<span>This month</span></h3>
+          <div class="stack"><i style="flex:49;background:#0A84FF"></i><i style="flex:27;background:#5E5CE6"></i><i style="flex:16;background:#30B0C7"></i><i style="flex:8;background:#C7C7CC"></i></div>
+          <div class="claim"><i style="background:#0A84FF"></i><span>Researcher<br><small>claude-opus-5 · 1,140 calls</small></span><small>49%</small><b>$90.40</b></div>
+          <div class="claim"><i style="background:#5E5CE6"></i><span>Writer<br><small>claude-sonnet-5 · 2,310 calls</small></span><small>27%</small><b>$49.80</b></div>
+          <div class="claim"><i style="background:#30B0C7"></i><span>Verifier<br><small>claude-haiku · 4,800 calls</small></span><small>16%</small><b>$29.60</b></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<script>lucide.createIcons();</script>
+</body>
+</html>

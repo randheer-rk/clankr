@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · A · Acme</title>
+<style>
+  /* Rules (Plan 9 acme): text is the interface. Pale yellow bodies, pale blue tags, olive
+     scrollbars, one proportional face + one mono face, no icons, no buttons: commands are words
+     in the tag you click. Colour only for "dirty"/attention. */
+  @font-face { font-family: Go; src: url(fonts/Go-Regular.ttf); }
+  @font-face { font-family: Go; font-weight: 700; src: url(fonts/Go-Bold.ttf); }
+  @font-face { font-family: GoMono; src: url(fonts/Go-Mono.ttf); }
+  @font-face { font-family: GoMono; font-weight: 700; src: url(fonts/Go-Mono-Bold.ttf); }
+  :root { --body: #FFFFEA; --tag: #EAFFFF; --border: #8888CC; --scroll: #99994C; --thumb: #FFFFEA;
+          --selb: #EEEE9E; --selt: #9EEEEE; --ink: #000; --dim: #55554A; --dirty: #000099; --attn: #B5260C; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1440px; height: 900px; background: var(--border); font: 14px/1.38 Go, sans-serif; color: var(--ink); overflow: hidden; display: flex; flex-direction: column; gap: 1px; }
+  .mono { font-family: GoMono, monospace; font-size: 13px; }
+  .tag { background: var(--tag); padding: 2px 6px 2px 4px; display: flex; gap: 10px; white-space: nowrap; overflow: hidden; border-bottom: 1px solid var(--border); }
+  .tag .box { width: 12px; height: 12px; margin-top: 3px; background: var(--border); flex: none; }
+  .tag .box.dirty { background: var(--dirty); }
+  .tag .path { font-weight: 700; }
+  .tag .sel { background: var(--selt); }
+  .cols { flex: 1; display: grid; grid-template-columns: 340px 1fr 440px; gap: 1px; min-height: 0; }
+  .col { min-width: 0; display: flex; flex-direction: column; gap: 1px; min-height: 0; background: var(--border); }
+  .win { background: var(--body); display: flex; flex-direction: column; min-height: 0; }
+  .win .main { display: flex; flex: 1; min-height: 0; }
+  .sb { width: 12px; background: var(--scroll); flex: none; position: relative; border-right: 1px solid var(--border); }
+  .sb i { position: absolute; left: 0; right: 0; background: var(--thumb); }
+  .text { padding: 4px 8px; flex: 1; overflow: hidden; white-space: pre; }
+  .text .mono { font-size: 13px; }
+  .text .sel { background: var(--selb); }
+  .attn { color: var(--attn); font-weight: 700; }
+  .dim { color: var(--dim); }
+  .b { font-weight: 700; }
+  .u { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="tag"><span>Newcol Kill Putall Dump Exit</span><span class="dim">|</span><span>clankr research@https://clankr.internal:7600 as user:ana@example.com</span></div>
+<div class="cols">
+  <div class="col">
+    <div class="tag"><span>New Cut Paste Snarf Sort Zerox Delcol</span></div>
+    <div class="win" style="flex: 0 0 300px">
+      <div class="tag"><span class="box"></span><span class="path">/research/runs/</span><span>Del Get Look</span><span class="dim">state=running</span></div>
+      <div class="main"><div class="sb"><i style="top:0;height:60%"></i></div>
+<div class="text mono">RUN       WORKFLOW         STATE
+<span class="sel">1184faf4  research-report  <span class="attn">waiting review</span></span>
+0e2b9c11  research-report  running research
+7d41aa02  nightly-digest   running gather
+c90f3d5e  triage-inbox     running plan
+
+<span class="dim">done today</span>
+51aa2c70  research-report  succeeded 6m02s
+a3c8e911  nightly-digest   failed    publish
+44f0b7d2  triage-inbox     succeeded 48s
+</div></div>
+    </div>
+    <div class="win" style="flex: 1">
+      <div class="tag"><span class="box dirty"></span><span class="path">/research/approvals/</span><span>Del Get</span><span class="dim">mine=true</span></div>
+      <div class="main"><div class="sb"><i style="top:0;height:100%"></i></div>
+<div class="text mono"><span class="attn">3 waiting on you</span>
+
+<span class="sel">8b7d6a7f  review   1184faf4  2d left</span>
+f02c118a  publish  7d41aa02  6h left
+19e6d0b3  send     c90f3d5e  no deadline
+
+<span class="dim">not yours (you started them)</span>
+6e5a0c44  review   0e2b9c11  editors
+</div></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="tag"><span>New Cut Paste Snarf Sort Zerox Delcol</span></div>
+    <div class="win" style="flex: 1">
+      <div class="tag"><span class="box"></span><span class="path">/research/runs/1184faf4</span><span>Del Get Cancel History Graph Signal</span><span class="dim">|</span><span class="sel">Look lease</span></div>
+      <div class="main"><div class="sb"><i style="top:0;height:58%"></i></div>
+<div class="text"><span class="b">research-report</span>  generation 3   started by serviceaccount:research/ci at 17:33:19
+<span class="attn">waiting</span> on review (approval, group editors) for 3m · elapsed 4m12s · 41.2k tokens · $0.84
+
+<span class="mono">plan --+-- research --+     <span class="dim">#1 lost lease, #2 ok $0.41</span>
+       |              |
+       +-- verify ----+-- gather -- <span class="attn">review</span> .. publish
+           <span class="dim">1m02s $0.19</span>        <span class="dim">2/2</span>      <span class="attn">^ you</span></span>
+
+<span class="b">History</span>  <span class="dim">14 events, replay verified</span>
+<span class="mono"> 14 17:37:31.204  WaitStarted     approve.review -> approval 8b7d6a7f, deadline 2d
+ 13 17:37:31.204  NodeEntered     review visit 1
+ 12 17:37:31.198  TaskCompleted   research#1.1 epoch 1 node-b 18.4k tok $0.41
+ 11 17:36:12.870  TaskFailed      research#1.1 attempt 1 retryable: <span class="sel">lease</span> lost
+ 10 17:35:58.002  TaskCompleted   verify#1.1 epoch 1 node-a 9.6k tok $0.19
+  9 17:34:51.443  TaskScheduled   research#1.1 attempt 2 agent/researcher
+  7 17:33:25.871  TaskCompleted   plan#1.1 epoch 1 node-a 3.1k tok $0.04
+  6 17:33:25.871  NodeEntered     research, verify
+  1 17:33:19.255  RunStarted      {"topic": "durability"}</span>
+
+<span class="b">Lease</span> <span class="dim">(Look lease)</span>
+<span class="mono">  research#1.1  epoch 1  node-a  lost at 17:36:12  instance moved after partition
+  research#1.1  epoch 1  node-b  completed</span>
+</div></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="tag"><span>New Cut Paste Snarf Sort Zerox Delcol</span></div>
+    <div class="win" style="flex: 0 0 470px">
+      <div class="tag"><span class="box dirty"></span><span class="path">/research/approvals/8b7d6a7f</span><span class="sel">Approve</span><span>Reject Del Get</span></div>
+      <div class="main"><div class="sb"><i style="top:0;height:100%"></i></div>
+<div class="text">Approve <span class="b">review</span> in run 1184faf4 (research-report)?
+group <span class="b">editors</span> — you are a member
+requested by serviceaccount:research/ci
+deadline Tue 3 Nov 17:37 UTC (auto-reject)
+digest <span class="mono">a1f37693101c0741 72775a6eccfa0a3d</span>
+
+<span class="dim">What you are approving (run data at visit 1):</span>
+<span class="mono">gather.summary
+  "Durable execution means the workflow's
+   progress survives worker loss, so retries
+   pick up where they left off…"
+verify.ok          true
+research.sources   12, 2 flagged low confidence
+</span>
+Comment: <span class="sel">sources checked, flagged two are fine</span>
+
+<span class="dim">Click Approve or Reject in the tag. The comment is
+everything after "Comment:" and goes to the audit log.</span>
+</div></div>
+    </div>
+    <div class="win" style="flex: 1">
+      <div class="tag"><span class="box"></span><span class="path">/research/usage</span><span>Del Get</span><span class="dim">today (UTC)</span></div>
+      <div class="main"><div class="sb"><i style="top:0;height:100%"></i></div>
+<div class="text mono">budget daily      cost    $12.40 of $25.00  ######......  50%
+                  tokens  611k  of 1.0M     #######.....  61%
+quota  activeRuns         3 of 10           ####........  30%
+       cpus               3.5 of 8          #####.......  44%
+
+<span class="dim">spend this month by claim</span>
+chat-opus      214 calls  $9.12
+researcher      88 calls  $2.71
+</div></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

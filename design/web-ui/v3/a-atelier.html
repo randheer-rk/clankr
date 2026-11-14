@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · Atelier</title>
+<link href="https://api.fontshare.com/v2/css?f[]=gambetta@400,500,600&f[]=general-sans@400,500,600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F3ECE0; --paper: #FBF7F0; --sand: #E8DCC7; --line: #DDD0BA;
+    --ink: #221E19; --ink-2: #6B6256; --ink-3: #9C9283;
+    --terra: #C0502B; --terra-soft: #F3D9CC; --olive: #5D6A38; --olive-soft: #E1E4CF; --sky: #3F6E8C;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1440px; background: var(--bg); color: var(--ink); font: 16px/1.55 "General Sans", sans-serif; -webkit-font-smoothing: antialiased;
+         background-image: radial-gradient(rgba(60,40,20,.035) 1px, transparent 1px); background-size: 3px 3px; }
+  .serif { font-family: "Gambetta", serif; }
+  nav { display: flex; align-items: center; gap: 40px; padding: 28px 72px; }
+  .brand { font: 600 26px "Gambetta", serif; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; }
+  .brand svg { flex: none; }
+  .links { display: flex; gap: 30px; font-weight: 500; color: var(--ink-2); }
+  .links .on { color: var(--ink); }
+  .links .n { background: var(--terra); color: #fff; font-size: 12px; padding: 1px 8px; border-radius: 20px; margin-left: 6px; vertical-align: 2px; }
+  .me { margin-left: auto; display: flex; align-items: center; gap: 12px; color: var(--ink-2); }
+  .me i { width: 38px; height: 38px; border-radius: 50%; background: var(--olive); color: var(--paper); font: 500 15px/38px "General Sans"; text-align: center; font-style: normal; }
+  header { padding: 36px 72px 0; display: grid; grid-template-columns: 1fr auto; align-items: end; }
+  .eyebrow { color: var(--ink-2); font-weight: 500; display: flex; gap: 10px; align-items: center; }
+  .eyebrow .pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--terra); box-shadow: 0 0 0 5px var(--terra-soft); }
+  h1 { font: 500 76px/1 "Gambetta", serif; letter-spacing: -0.035em; margin-top: 14px; }
+  h1 em { font-style: normal; color: var(--terra); }
+  .lede { font-size: 19px; color: var(--ink-2); margin-top: 16px; max-width: 640px; }
+  .figs { display: flex; gap: 48px; text-align: right; }
+  .figs b { display: block; font: 500 40px/1 "Gambetta", serif; letter-spacing: -0.02em; }
+  .figs span { color: var(--ink-3); font-size: 14px; }
+  .stage { display: grid; grid-template-columns: 1fr 440px; gap: 32px; padding: 44px 72px 0; }
+  .canvas { background: var(--paper); border-radius: 28px; padding: 32px 36px 28px; position: relative; overflow: hidden; border: 1px solid var(--line); }
+  .canvas h3, .panel h3 { font: 500 15px "General Sans"; color: var(--ink-2); display: flex; justify-content: space-between; }
+  .flow { position: relative; height: 380px; margin-top: 12px; }
+  .flow svg.ribbons { position: absolute; inset: 0; }
+  .agent { position: absolute; width: 150px; text-align: center; }
+  .agent .face { width: 84px; height: 84px; margin: 0 auto 12px; border-radius: 26px; display: grid; place-items: center; }
+  .agent b { display: block; font: 500 22px "Gambetta", serif; letter-spacing: -0.01em; }
+  .agent span { color: var(--ink-3); font-size: 14px; }
+  .agent.wait .face { outline: 3px solid var(--terra); outline-offset: 5px; }
+  .agent.todo { opacity: .45; }
+  .note { position: absolute; left: 470px; top: 330px; background: var(--terra-soft); color: #7A2F16; font-size: 13px; padding: 6px 12px; border-radius: 4px 14px 14px 14px; }
+  .decision { background: var(--ink); color: var(--paper); border-radius: 28px; padding: 34px 34px 30px; position: relative; }
+  .decision .tag { display: inline-flex; gap: 8px; align-items: center; background: rgba(251,247,240,.1); padding: 6px 14px; border-radius: 20px; font-size: 14px; color: #E9D8C2; }
+  .decision h2 { font: 500 38px/1.08 "Gambetta", serif; letter-spacing: -0.02em; margin: 22px 0 18px; }
+  .quote { font: 400 21px/1.45 "Gambetta", serif; color: #EFE4D4; border-left: 2px solid var(--terra); padding-left: 18px; }
+  .facts { display: flex; gap: 22px; margin: 22px 0 26px; color: #BFB2A0; font-size: 14px; }
+  .facts b { color: var(--paper); font-weight: 500; display: block; font-size: 16px; }
+  .comment { background: rgba(251,247,240,.07); border-radius: 16px; padding: 14px 16px; color: #A99C8A; font-size: 15px; }
+  .acts { display: flex; gap: 12px; margin-top: 18px; }
+  .btn { flex: 1; text-align: center; padding: 16px; border-radius: 40px; font-weight: 600; font-size: 16px; }
+  .btn.ghost { border: 1px solid rgba(251,247,240,.25); }
+  .btn.go { background: var(--terra); color: #fff; flex: 1.6; }
+  .fine { color: #8E826F; font-size: 13px; margin-top: 14px; text-align: center; }
+  .lower { display: grid; grid-template-columns: 1.35fr 1fr; gap: 32px; padding: 32px 72px 72px; }
+  .panel { background: var(--paper); border-radius: 28px; padding: 32px 36px; border: 1px solid var(--line); }
+  .story { margin-top: 18px; }
+  .ch { display: grid; grid-template-columns: 70px 26px 1fr; gap: 14px; padding-bottom: 22px; position: relative; }
+  .ch time { color: var(--ink-3); font-size: 14px; padding-top: 2px; }
+  .ch .dot { width: 14px; height: 14px; border-radius: 50%; margin: 5px auto 0; background: var(--sand); position: relative; z-index: 1; }
+  .ch::after { content: ""; position: absolute; left: 96px; top: 20px; bottom: -4px; width: 2px; background: var(--sand); }
+  .ch:last-child::after { display: none; }
+  .ch p { font-size: 17px; }
+  .ch p small { display: block; color: var(--ink-3); font-size: 14px; }
+  .big { display: grid; grid-template-columns: 1fr 1fr; gap: 26px 32px; margin-top: 20px; }
+  .big b { font: 500 46px/1 "Gambetta", serif; letter-spacing: -0.03em; }
+  .big b small { font: 400 20px "Gambetta", serif; color: var(--ink-3); }
+  .big .lbl { color: var(--ink-2); font-size: 14px; margin: 4px 0 10px; }
+  .bar { height: 10px; border-radius: 10px; background: var(--sand); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 10px; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand"><svg width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="14" fill="#221E19"/><path d="M9 18c2.5-6 9.5-6 12 0" stroke="#F3ECE0" stroke-width="2.4" fill="none" stroke-linecap="round"/><circle cx="11" cy="12" r="1.8" fill="#F3ECE0"/><circle cx="19" cy="12" r="1.8" fill="#F3ECE0"/></svg>clankr</div>
+  <div class="links"><span class="on">Runs</span><span>Approvals<span class="n">3</span></span><span>Agents</span><span>Budgets</span><span>Audit</span></div>
+  <div class="me">Research team <i>AN</i></div>
+</nav>
+
+<header>
+  <div>
+    <div class="eyebrow"><span class="pulse"></span>Research report · run 1184faf4 · started by the CI pipeline</div>
+    <h1>Waiting for <em>your</em> review</h1>
+    <p class="lede">Planning, research and verification are done. Nothing gets published until an editor signs off.</p>
+  </div>
+  <div class="figs"><div><b>4m 12s</b><span>so far</span></div><div><b>$0.84</b><span>model spend</span></div><div><b>1</b><span>retry, recovered</span></div></div>
+</header>
+
+<section class="stage">
+  <div class="canvas">
+    <h3><span>How this run flowed</span><span>6 steps · 4 done</span></h3>
+    <div class="flow">
+      <svg class="ribbons" width="760" height="380">
+        <g fill="none" stroke-linecap="round">
+          <path d="M120 190 C 200 190, 200 90, 290 90" stroke="#D7C7AE" stroke-width="10"/>
+          <path d="M120 190 C 200 190, 200 290, 290 290" stroke="#D7C7AE" stroke-width="10"/>
+          <path d="M370 90 C 450 90, 450 190, 520 190" stroke="#D7C7AE" stroke-width="10"/>
+          <path d="M370 290 C 450 290, 450 190, 520 190" stroke="#D7C7AE" stroke-width="10"/>
+          <path d="M600 190 C 640 190, 650 190, 690 190" stroke="#C0502B" stroke-width="10" stroke-dasharray="1 18"/>
+        </g>
+      </svg>
+      <div class="agent" style="left:4px;top:120px"><div class="face" style="background:#E1E4CF"><svg width="44" height="44"><path d="M22 6 L38 34 H6 Z" fill="#5D6A38"/><path d="M22 18 L30 34 H14 Z" fill="#E1E4CF"/></svg></div><b>Plan</b><span>6 seconds</span></div>
+      <div class="agent" style="left:256px;top:16px"><div class="face" style="background:#DCE6EC"><svg width="44" height="44"><circle cx="19" cy="19" r="11" stroke="#3F6E8C" stroke-width="5" fill="none"/><path d="M27 27 L37 37" stroke="#3F6E8C" stroke-width="5" stroke-linecap="round"/></svg></div><b>Research</b><span>2m 40s · $0.41</span></div>
+      <div class="agent" style="left:256px;top:216px"><div class="face" style="background:#E1E4CF"><svg width="44" height="44"><rect x="6" y="6" width="32" height="32" rx="9" fill="#5D6A38"/><path d="M14 22 l6 6 l11 -12" stroke="#E1E4CF" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div><b>Verify</b><span>1m 02s · $0.19</span></div>
+      <div class="agent" style="left:486px;top:120px"><div class="face" style="background:#ECE1CE"><svg width="44" height="44"><circle cx="15" cy="22" r="9" fill="#9C7A45"/><circle cx="29" cy="22" r="9" fill="#9C7A45" opacity=".55"/></svg></div><b>Gather</b><span>both arrived</span></div>
+      <div class="agent wait" style="left:640px;top:120px;width:120px"><div class="face" style="background:#F3D9CC"><svg width="44" height="44"><circle cx="22" cy="17" r="8" fill="#C0502B"/><path d="M8 38c2-9 26-9 28 0" fill="#C0502B"/></svg></div><b>Review</b><span>you · editors</span></div>
+      <div class="note">↻ Research moved to another machine once, no work lost</div>
+    </div>
+  </div>
+
+  <aside class="decision">
+    <span class="tag">● Needs your decision · 2 days left</span>
+    <h2>Publish the research report?</h2>
+    <p class="quote">“Durable execution means the workflow’s progress survives worker loss, so retries pick up where they left off.”</p>
+    <div class="facts"><div><b>Verified</b>by the verifier</div><div><b>12 sources</b>2 flagged</div><div><b>Requested</b>by CI pipeline</div></div>
+    <div class="comment">Add a note for the audit log…</div>
+    <div class="acts"><span class="btn ghost">Send back</span><span class="btn go">Approve &amp; publish</span></div>
+    <p class="fine">Your sign-off applies to exactly this version of the report.</p>
+  </aside>
+</section>
+
+<section class="lower">
+  <div class="panel">
+    <h3><span>The story so far</span><span>14 events · <u>full history</u></span></h3>
+    <div class="story">
+      <div class="ch"><time>5:37 pm</time><span class="dot" style="background:var(--terra)"></span><p>Paused for an editor’s review<small>You and 4 other editors were notified</small></p></div>
+      <div class="ch"><time>5:37 pm</time><span class="dot" style="background:var(--olive)"></span><p>Research finished on a second machine<small>18.4k tokens · $0.41</small></p></div>
+      <div class="ch"><time>5:36 pm</time><span class="dot" style="background:#D9A441"></span><p>First research machine dropped off the network<small>Its work was set aside safely and retried</small></p></div>
+      <div class="ch"><time>5:35 pm</time><span class="dot" style="background:var(--olive)"></span><p>Sources verified<small>9.6k tokens · $0.19</small></p></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h3><span>Research team budget</span><span>today</span></h3>
+    <div class="big">
+      <div><b>$12.40 <small>of $25</small></b><div class="lbl">Model spend</div><div class="bar"><i style="width:50%;background:var(--olive)"></i></div></div>
+      <div><b>611k <small>of 1M</small></b><div class="lbl">Tokens</div><div class="bar"><i style="width:61%;background:#D9A441"></i></div></div>
+      <div><b>3 <small>of 10</small></b><div class="lbl">Runs in progress</div><div class="bar"><i style="width:30%;background:var(--sky)"></i></div></div>
+      <div><b>3.5 <small>of 8</small></b><div class="lbl">CPUs reserved</div><div class="bar"><i style="width:44%;background:var(--sky)"></i></div></div>
+    </div>
+  </div>
+</section>
+</body>
+</html>

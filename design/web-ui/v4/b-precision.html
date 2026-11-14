@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · Precision (Linear / Raycast)</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<style>
+  :root { --bg: #08090A; --s1: #0F1011; --s2: #141517; --s3: #1B1C1F; --line: rgba(255,255,255,.06); --line2: rgba(255,255,255,.09);
+          --tx: #EDEEF0; --tx2: #9BA1A6; --tx3: #62666D; --amber: #F5A623; --green: #46C779; --blue: #5B9BFF; --red: #F2555A; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1440px; height: 900px; overflow: hidden; background: var(--bg); color: var(--tx); font: 13px/1.45 Inter, sans-serif; -webkit-font-smoothing: antialiased; font-feature-settings: "cv11","ss01"; display: grid; grid-template-columns: 232px 1fr; }
+  svg.lucide { width: 15px; height: 15px; stroke-width: 1.8; flex: none; }
+  .mono { font-family: "JetBrains Mono", monospace; font-size: 12px; }
+  .side { background: var(--s1); border-right: 1px solid var(--line); padding: 12px 10px; display: flex; flex-direction: column; gap: 1px; }
+  .ws { display: flex; align-items: center; gap: 9px; padding: 6px 8px 14px; font-weight: 600; }
+  .ws .lg { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(140deg, #F5A623, #E5484D); display: grid; place-items: center; color: #08090A; }
+  .ws .lg svg { width: 13px; height: 13px; stroke-width: 2.4; }
+  .ws .chev { margin-left: auto; color: var(--tx3); }
+  .cmd { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; background: var(--s2); border: 1px solid var(--line); color: var(--tx3); margin-bottom: 12px; }
+  .cmd kbd { margin-left: auto; font: 500 11px Inter; color: var(--tx3); border: 1px solid var(--line2); border-radius: 4px; padding: 0 5px; }
+  .it { display: flex; align-items: center; gap: 9px; padding: 6px 9px; border-radius: 6px; color: var(--tx2); font-weight: 500; }
+  .it svg { color: var(--tx3); }
+  .it.on { background: var(--s3); color: var(--tx); }
+  .it.on svg { color: var(--tx); }
+  .it .c { margin-left: auto; font-size: 12px; color: var(--tx3); }
+  .it .c.hot { color: var(--amber); }
+  .lbl { font-size: 11.5px; color: var(--tx3); font-weight: 500; padding: 16px 9px 6px; }
+  .team { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 9px; font-weight: 700; color: #08090A; }
+  .main { display: grid; grid-template-rows: 46px 1fr; min-width: 0; }
+  .top { display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid var(--line); color: var(--tx2); }
+  .top b { color: var(--tx); font-weight: 500; }
+  .top .r { margin-left: auto; display: flex; gap: 6px; }
+  .chip { border: 1px solid var(--line2); border-radius: 6px; padding: 3px 9px; display: inline-flex; gap: 6px; align-items: center; color: var(--tx2); }
+  .cols { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
+  .content { padding: 30px 48px; overflow: hidden; }
+  .id { color: var(--tx3); }
+  h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin: 6px 0 6px; }
+  .sub { color: var(--tx2); font-size: 14px; }
+  .ask { margin-top: 24px; border-radius: 12px; background: linear-gradient(180deg, rgba(245,166,35,.09), rgba(245,166,35,.035)); border: 1px solid rgba(245,166,35,.22); padding: 16px 18px; }
+  .ask .h { display: flex; align-items: center; gap: 10px; }
+  .ask .h svg { color: var(--amber); }
+  .ask .h b { font-weight: 600; font-size: 14px; }
+  .ask .h span { margin-left: auto; color: var(--tx3); }
+  .ask blockquote { margin: 12px 0 0 25px; color: var(--tx); font-size: 14px; line-height: 1.55; padding-left: 12px; border-left: 2px solid rgba(255,255,255,.12); }
+  .ask .chips { display: flex; gap: 6px; margin: 12px 0 0 25px; }
+  .ask .chips span { background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; color: var(--tx2); font-size: 12px; display: inline-flex; gap: 5px; align-items: center; }
+  .ask .chips svg { width: 12px; height: 12px; }
+  .ask .acts { display: flex; gap: 8px; margin: 16px 0 0 25px; align-items: center; }
+  .btn { white-space: nowrap; border-radius: 7px; padding: 6px 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; }
+  .btn kbd { font: 500 11px Inter; opacity: .7; }
+  .btn.p { background: #EDEEF0; color: #08090A; box-shadow: 0 1px 0 rgba(255,255,255,.4) inset; }
+  .btn.g { background: var(--s3); border: 1px solid var(--line2); color: var(--tx); }
+  .ask .note { color: var(--tx3); margin-left: auto; }
+  .sect { margin-top: 30px; }
+  .sect h3 { font-size: 13px; font-weight: 500; color: var(--tx2); display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .graph { position: relative; height: 150px; border: 1px solid var(--line); border-radius: 12px; background: radial-gradient(circle at 1px 1px, rgba(255,255,255,.05) 1px, transparent 1px) 0 0 / 16px 16px, var(--s1); }
+  .graph svg.l { position: absolute; inset: 0; }
+  .n { position: absolute; display: flex; align-items: center; gap: 7px; background: var(--s2); border: 1px solid var(--line2); border-radius: 8px; padding: 6px 10px; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+  .n svg { width: 14px; height: 14px; }
+  .n small { color: var(--tx3); font-weight: 400; }
+  .n.w { border-color: rgba(245,166,35,.55); box-shadow: 0 0 0 3px rgba(245,166,35,.12), 0 4px 12px rgba(0,0,0,.4); }
+  .n.t { opacity: .45; border-style: dashed; box-shadow: none; }
+  .feed .e { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; padding: 8px 0; align-items: start; position: relative; }
+  .feed .e::before { content: ""; position: absolute; left: 12px; top: 30px; bottom: -6px; width: 1px; background: var(--line2); }
+  .feed .e:last-child::before { display: none; }
+  .feed .ic { width: 25px; height: 25px; border-radius: 50%; background: var(--s2); border: 1px solid var(--line2); display: grid; place-items: center; }
+  .feed .ic svg { width: 13px; height: 13px; }
+  .feed p { color: var(--tx2); padding-top: 3px; }
+  .feed p b { color: var(--tx); font-weight: 500; }
+  .feed time { color: var(--tx3); padding-top: 3px; }
+  .props { border-left: 1px solid var(--line); padding: 24px 20px; }
+  .props h4 { font-size: 12px; color: var(--tx3); font-weight: 500; margin: 0 0 10px; }
+  .p { display: grid; grid-template-columns: 92px 1fr; align-items: center; padding: 6px 0; color: var(--tx2); }
+  .p span:last-child { color: var(--tx); display: inline-flex; align-items: center; gap: 7px; }
+  .st { display: inline-flex; align-items: center; gap: 6px; }
+  .av { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 9px; font-weight: 700; color: #08090A; }
+  .hr { height: 1px; background: var(--line); margin: 16px 0; }
+  .bud .row { display: flex; justify-content: space-between; color: var(--tx2); margin-top: 12px; }
+  .bud .row b { color: var(--tx); font-weight: 500; }
+  .track { height: 4px; border-radius: 4px; background: var(--s3); margin-top: 7px; overflow: hidden; }
+  .track i { display: block; height: 100%; border-radius: 4px; }
+</style>
+</head>
+<body>
+<aside class="side">
+  <div class="ws"><span class="lg"><i data-lucide="zap"></i></span>Clankr<i class="chev" data-lucide="chevrons-up-down"></i></div>
+  <div class="cmd"><i data-lucide="search"></i>Search or jump to…<kbd>⌘K</kbd></div>
+  <div class="it"><i data-lucide="inbox"></i>Inbox<span class="c hot">3</span></div>
+  <div class="it"><i data-lucide="circle-user"></i>My approvals</div>
+  <div class="lbl">Research</div>
+  <div class="it on"><i data-lucide="play"></i>Runs<span class="c">14</span></div>
+  <div class="it"><i data-lucide="bot"></i>Agents</div>
+  <div class="it"><i data-lucide="git-fork"></i>Workflows</div>
+  <div class="it"><i data-lucide="chart-no-axes-column"></i>Budgets</div>
+  <div class="lbl">Workspaces</div>
+  <div class="it"><span class="team" style="background:#5B9BFF">R</span>Research</div>
+  <div class="it"><span class="team" style="background:#46C779">S</span>Support</div>
+  <div class="it"><span class="team" style="background:#F5A623">G</span>Growth</div>
+  <div class="lbl">Cluster</div>
+  <div class="it"><i data-lucide="server"></i>Nodes<span class="c">2 healthy</span></div>
+  <div class="it"><i data-lucide="shield-check"></i>Access &amp; audit</div>
+</aside>
+<div class="main">
+  <div class="top"><i data-lucide="play" style="width:14px;height:14px"></i>Runs<i data-lucide="chevron-right" style="width:13px;height:13px;color:var(--tx3)"></i><b>Research report on durable execution</b><div class="r"><span class="chip"><i data-lucide="link-2" style="width:13px;height:13px"></i>Copy link</span><span class="chip"><i data-lucide="ellipsis" style="width:13px;height:13px"></i></span></div></div>
+  <div class="cols">
+    <div class="content">
+      <div class="id mono">RUN-1184 · research-report</div>
+      <h1>Research report on durable execution</h1>
+      <div class="sub">Plan, research and verification finished. Paused at review before anything is published.</div>
+
+      <div class="ask">
+        <div class="h"><i data-lucide="circle-pause"></i><b>Your approval is needed to publish</b><span>Editors · closes in 2 days</span></div>
+        <blockquote>“Durable execution means the workflow’s progress survives worker loss, so retries pick up where they left off.”</blockquote>
+        <div class="chips"><span><i data-lucide="badge-check"></i>Verified</span><span><i data-lucide="link"></i>12 sources</span><span style="color:var(--amber)"><i data-lucide="flag"></i>2 flagged</span></div>
+        <div class="acts"><span class="btn p" style="padding:6px 14px">Approve &amp; publish</span><span class="btn g">Send back</span><span class="btn g">View full output</span><span class="note">Signs this exact version</span></div>
+      </div>
+
+      <div class="sect">
+        <h3><span>Flow</span><span style="color:var(--tx3)">4 of 6 · 1 retry</span></h3>
+        <div class="graph">
+          <svg class="l" width="100%" height="150"><g fill="none" stroke="rgba(255,255,255,.14)" stroke-width="1.2">
+            <path d="M104 75 C 140 75, 140 38, 176 38"/><path d="M104 75 C 140 75, 140 112, 176 112"/>
+            <path d="M300 38 C 336 38, 336 75, 372 75"/><path d="M284 112 C 336 112, 336 75, 372 75"/></g>
+            <path d="M470 75 H 520" stroke="#F5A623" stroke-width="1.5" fill="none"/><path d="M630 75 H 680" stroke="rgba(255,255,255,.14)" stroke-dasharray="3 4" fill="none"/></svg>
+          <div class="n" style="left:24px;top:59px"><i data-lucide="circle-check" style="color:var(--green)"></i>Plan</div>
+          <div class="n" style="left:176px;top:22px"><i data-lucide="circle-check" style="color:var(--green)"></i>Research<small>↻ 1</small></div>
+          <div class="n" style="left:176px;top:96px"><i data-lucide="circle-check" style="color:var(--green)"></i>Verify</div>
+          <div class="n" style="left:372px;top:59px"><i data-lucide="circle-check" style="color:var(--green)"></i>Gather</div>
+          <div class="n w" style="left:520px;top:59px"><i data-lucide="circle-pause" style="color:var(--amber)"></i>Review</div>
+          <div class="n t" style="left:680px;top:59px"><i data-lucide="circle-dashed"></i>Publish</div>
+        </div>
+      </div>
+
+      <div class="sect feed">
+        <h3><span>Activity</span><span style="color:var(--tx3)">14 events</span></h3>
+        <div class="e"><span class="ic"><i data-lucide="circle-pause" style="color:var(--amber)"></i></span><p><b>Review</b> paused the run for an editor decision</p><time>3m ago</time></div>
+        <div class="e"><span class="ic"><i data-lucide="circle-check" style="color:var(--green)"></i></span><p><b>Research</b> finished on node-b · 18.4k tokens · $0.41</p><time>3m ago</time></div>
+        <div class="e"><span class="ic"><i data-lucide="refresh-cw" style="color:var(--blue)"></i></span><p><b>Research</b> moved off node-a after it lost connection — no work lost</p><time>4m ago</time></div>
+      </div>
+    </div>
+
+    <aside class="props">
+      <h4>Properties</h4>
+      <div class="p"><span>Status</span><span class="st"><i data-lucide="circle-pause" style="color:var(--amber)"></i>Waiting for review</span></div>
+      <div class="p"><span>Workflow</span><span><i data-lucide="git-fork"></i>research-report</span></div>
+      <div class="p"><span>Started by</span><span><span class="av" style="background:#9BA1A6">CI</span>CI pipeline</span></div>
+      <div class="p"><span>Approvers</span><span><span class="av" style="background:#F5A623">E</span>Editors · 5</span></div>
+      <div class="p"><span>Duration</span><span>4m 12s</span></div>
+      <div class="p"><span>Cost</span><span>$0.84 · 41.2k tok</span></div>
+      <div class="p"><span>Nodes</span><span>node-a, node-b</span></div>
+      <div class="hr"></div>
+      <h4>Research budget · today</h4>
+      <div class="bud">
+        <div class="row"><span>Spend</span><b>$12.40 / $25</b></div><div class="track"><i style="width:50%;background:var(--blue)"></i></div>
+        <div class="row"><span>Tokens</span><b>611k / 1M</b></div><div class="track"><i style="width:61%;background:var(--amber)"></i></div>
+        <div class="row"><span>Concurrent runs</span><b>3 / 10</b></div><div class="track"><i style="width:30%;background:var(--green)"></i></div>
+      </div>
+    </aside>
+  </div>
+</div>
+<script>lucide.createIcons();</script>
+</body>
+</html>

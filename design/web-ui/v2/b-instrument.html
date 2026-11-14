@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clankr · B · Instrument</title>
+<link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wdth,wght@75..112.5,100..800&display=swap" rel="stylesheet">
+<style>
+  /* Rules (Teenage Engineering / Braun): an instrument panel. One monospaced family, labels tiny
+     and uppercase, readouts large and thin. Zero radius, zero shadow, zero gradient. Modules are
+     cut by 1px gaps on a dark chassis. Colour is code, never decoration:
+     ORANGE = needs a human · BLUE = running · OCHRE = retried/at risk · everything else grey. */
+  :root { --chassis: #1B1B1B; --panel: #E3E3DE; --panel-2: #D6D6D0; --ink: #141414; --ink-2: #6A6A64; --ink-3: #9C9C95;
+          --orange: #FF4F00; --blue: #1D3FD6; --ochre: #C49A00; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1440px; height: 900px; background: var(--chassis); color: var(--ink); font-family: "Martian Mono", monospace; font-variation-settings: "wdth" 87.5; overflow: hidden;
+         display: grid; grid-template-columns: 300px 1fr 1fr 380px; grid-template-rows: 64px 104px 1fr 1fr 34px; gap: 1px; }
+  .m { background: var(--panel); padding: 14px 16px; position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+  .lbl { font-size: 9.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); display: flex; justify-content: space-between; }
+  .lbl b { color: var(--ink); font-weight: 600; }
+  .num { font-weight: 200; font-size: 44px; line-height: 1; letter-spacing: -0.02em; font-variation-settings: "wdth" 75; }
+  .head { grid-column: 1 / -1; display: grid; grid-template-columns: 300px 1fr auto auto auto; gap: 1px; padding: 0; background: var(--chassis); }
+  .head > div { background: var(--panel); padding: 0 16px; display: flex; align-items: center; gap: 12px; font-size: 11px; }
+  .logo { font-weight: 700; font-size: 15px; letter-spacing: 0.02em; }
+  .logo span { width: 14px; height: 14px; background: var(--ink); display: inline-block; margin-right: 8px; vertical-align: -2px; }
+  .nav span { padding: 4px 0; margin-right: 18px; color: var(--ink-2); text-transform: uppercase; font-size: 10px; letter-spacing: 0.08em; }
+  .nav span.on { color: var(--ink); border-bottom: 2px solid var(--ink); }
+  .nav .o { color: var(--orange); }
+  .key { width: 10px; height: 10px; display: inline-block; vertical-align: -1px; margin-right: 6px; }
+  /* left column: run list as a channel strip */
+  .list { grid-row: 2 / 5; padding: 0; display: flex; flex-direction: column; }
+  .list .lbl { padding: 14px 16px 10px; }
+  .ch { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--panel-2); font-size: 11px; }
+  .ch .idx { color: var(--ink-3); font-size: 10px; }
+  .ch small { display: block; color: var(--ink-2); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+  .ch.on { background: var(--ink); color: var(--panel); }
+  .ch.on small, .ch.on .idx { color: var(--ink-3); }
+  .sq { width: 12px; height: 12px; }
+  /* readouts */
+  .readouts { grid-column: 2 / 4; grid-row: 2; display: grid; grid-template-columns: 1.5fr repeat(4, 1fr); gap: 1px; padding: 0; background: var(--chassis); }
+  .readouts > div { background: var(--panel); padding: 14px 16px; display: flex; flex-direction: column; justify-content: space-between; }
+  .title { font-weight: 600; font-size: 22px; letter-spacing: -0.01em; font-variation-settings: "wdth" 75; }
+  /* signal path */
+  .path { grid-column: 2 / 4; grid-row: 4; }
+  .path svg { position: absolute; left: 40px; top: 40px; }
+  /* sequencer */
+  .seq table { border-collapse: collapse; margin-top: 12px; }
+  .seq td { width: 30px; height: 22px; padding: 0; border: 1px solid var(--panel); }
+  .seq td.c { background: var(--panel-2); }
+  .seq td.x { background: var(--ink); }
+  .seq td.b { background: var(--blue); }
+  .seq td.r { background: var(--ochre); }
+  .seq td.o { background: var(--orange); }
+  .seq th { font-weight: 500; font-size: 9.5px; text-align: left; padding-right: 12px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.06em; }
+  .seq thead th { text-align: center; padding: 0 0 4px; color: var(--ink-3); }
+  /* gate */
+  .gate { grid-row: 2 / 4; grid-column: 4; }
+  .gate .q { font-size: 17px; font-weight: 500; margin: 12px 0 10px; line-height: 1.3; font-variation-settings: "wdth" 80; }
+  .kv { display: grid; grid-template-columns: 92px 1fr; font-size: 10.5px; row-gap: 4px; }
+  .kv dt { color: var(--ink-2); text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.06em; }
+  .hex { display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px; background: var(--ink-3); border: 1px solid var(--ink-3); margin-top: 10px; }
+  .hex span { background: var(--panel); font-size: 10px; text-align: center; padding: 3px 0; }
+  .keys { position: absolute; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 1fr 1.4fr; gap: 1px; background: var(--chassis); border-top: 1px solid var(--chassis); }
+  .keys div { background: var(--panel-2); height: 92px; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .keys div b { font-size: 26px; font-weight: 300; letter-spacing: 0; }
+  .keys div.go { background: var(--orange); color: #fff; }
+  .data { font-size: 10.5px; line-height: 1.5; margin-top: 12px; color: var(--ink); border-top: 1px solid var(--panel-2); padding-top: 10px; }
+  .data em { font-style: normal; color: var(--ink-2); text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.06em; display: block; }
+  /* meters */
+  .meters { grid-row: 4; grid-column: 4; display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 14px; align-content: start; }
+  .meters .lbl { grid-column: 1 / -1; margin-bottom: 12px; }
+  .vu { display: flex; flex-direction: column; gap: 10px; }
+  .bars { display: flex; flex-direction: column-reverse; gap: 3px; height: 120px; }
+  .bars i { flex: 1; background: var(--panel-2); }
+  .bars i.on { background: var(--ink); }
+  .bars i.w { background: var(--ochre); }
+  .vu .v { font-size: 20px; font-weight: 200; font-variation-settings: "wdth" 75; }
+  .vu .n { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); }
+  .foot { grid-column: 1 / -1; grid-row: 5; background: var(--panel); display: flex; align-items: center; gap: 24px; padding: 0 16px; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-2); }
+  .foot .r { margin-left: auto; }
+</style>
+</head>
+<body>
+<div class="head">
+  <div class="logo"><span></span>clankr</div>
+  <div class="nav"><span class="on">runs</span><span class="o">approvals 3</span><span>agents</span><span>nodes</span><span>budgets</span><span>audit</span></div>
+  <div>ns research</div>
+  <div>ana@example.com</div>
+  <div>leader 1 · epoch 7</div>
+</div>
+
+<div class="m list">
+  <div class="lbl"><span>runs · research</span><b>14</b></div>
+  <div class="ch on"><span class="idx">01</span><div>1184faf4<small>research-report · review</small></div><span class="sq" style="background:var(--orange)"></span></div>
+  <div class="ch"><span class="idx">02</span><div>0e2b9c11<small>research-report · research</small></div><span class="sq" style="background:var(--blue)"></span></div>
+  <div class="ch"><span class="idx">03</span><div>7d41aa02<small>nightly-digest · publish</small></div><span class="sq" style="background:var(--orange)"></span></div>
+  <div class="ch"><span class="idx">04</span><div>c90f3d5e<small>triage-inbox · send</small></div><span class="sq" style="background:var(--orange)"></span></div>
+  <div class="ch"><span class="idx">05</span><div>2f7e1a90<small>triage-inbox · plan</small></div><span class="sq" style="background:var(--ochre)"></span></div>
+  <div class="ch"><span class="idx">06</span><div>51aa2c70<small>research-report · done 6m02s</small></div><span class="sq" style="background:var(--ink-3)"></span></div>
+  <div class="ch"><span class="idx">07</span><div>a3c8e911<small>nightly-digest · failed</small></div><span class="sq" style="border:2px solid var(--ink)"></span></div>
+  <div class="ch"><span class="idx">08</span><div>44f0b7d2<small>triage-inbox · done 48s</small></div><span class="sq" style="background:var(--ink-3)"></span></div>
+  <div style="margin-top:auto;padding:14px 16px;font-size:9.5px;line-height:1.9;color:var(--ink-2);text-transform:uppercase;letter-spacing:.06em;border-top:1px solid var(--panel-2)">
+    <span class="key" style="background:var(--orange)"></span>needs a human<br>
+    <span class="key" style="background:var(--blue)"></span>running<br>
+    <span class="key" style="background:var(--ochre)"></span>retried · at risk<br>
+    <span class="key" style="background:var(--ink-3)"></span>done
+  </div>
+</div>
+
+<div class="readouts">
+  <div><div class="lbl"><span>workflow · gen 3</span></div><div class="title">research-report</div><div class="lbl"><span>run 1184faf4 · by sa:research/ci</span></div></div>
+  <div><div class="lbl"><span>elapsed</span></div><div class="num">04:12</div><div class="lbl"><span>min:sec</span></div></div>
+  <div><div class="lbl"><span>tokens</span></div><div class="num">41.2<span style="font-size:20px">k</span></div><div class="lbl"><span>in+out</span></div></div>
+  <div><div class="lbl"><span>cost</span></div><div class="num">0.84</div><div class="lbl"><span>usd</span></div></div>
+  <div><div class="lbl"><span>events</span></div><div class="num">14</div><div class="lbl"><span>replay ok</span></div></div>
+</div>
+
+<div class="m seq" style="grid-column: 2 / 4; grid-row: 3">
+  <div class="lbl"><span>sequencer · events by node</span><span>1 → 14</span></div>
+  <table>
+    <thead><tr><th></th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th><th>9</th><th>10</th><th>11</th><th>12</th><th>13</th><th>14</th><th style="padding-left:14px;text-align:left">last</th></tr></thead>
+    <tr><th>plan</th><td class="c"></td><td class="x"></td><td class="x"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="x"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><th style="padding-left:14px">done 6s</th></tr>
+    <tr><th>research</th><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="x"></td><td class="c"></td><td class="r"></td><td class="r"></td><td class="c"></td><td class="r"></td><td class="x"></td><td class="c"></td><td class="c"></td><th style="padding-left:14px;color:var(--ochre)">done after retry</th></tr>
+    <tr><th>verify</th><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="x"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="x"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><th style="padding-left:14px">done 1m02s</th></tr>
+    <tr><th>gather</th><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="x"></td><td class="c"></td><td class="c"></td><th style="padding-left:14px">2/2 joined</th></tr>
+    <tr><th>review</th><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="o"></td><td class="o"></td><th style="padding-left:14px;color:var(--orange)">waiting 3m</th></tr>
+    <tr><th>publish</th><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><td class="c"></td><th style="padding-left:14px;color:var(--ink-3)">—</th></tr>
+  </table>
+  <div class="lbl" style="margin-top:14px;justify-content:flex-start;gap:24px"><span>11 · lease lost on node-a, fenced 4→5</span><span>9 · attempt 2 scheduled</span><span>14 · approval 8b7d6a7f opened</span></div>
+</div>
+
+<div class="m path">
+  <div class="lbl"><span>signal path</span><span>review blocks publish</span></div>
+  <svg width="740" height="190" font-family="Martian Mono" font-size="10">
+    <g stroke="#141414" stroke-width="1.5" fill="none">
+      <path d="M40 90 H90 V40 H170"/><path d="M90 90 V140 H170"/>
+      <path d="M210 40 H290 V90 H340"/><path d="M210 140 H290 V90"/>
+      <path d="M380 90 H470"/>
+    </g>
+    <path d="M510 90 H600" stroke="#9C9C95" stroke-width="1.5" stroke-dasharray="4 4"/>
+    <rect x="0" y="70" width="40" height="40" fill="#141414"/>
+    <rect x="170" y="20" width="40" height="40" fill="#141414"/>
+    <rect x="170" y="120" width="40" height="40" fill="#141414"/>
+    <rect x="340" y="70" width="40" height="40" fill="#141414"/>
+    <rect x="470" y="70" width="40" height="40" fill="#FF4F00"/>
+    <rect x="600" y="70" width="40" height="40" fill="none" stroke="#9C9C95" stroke-width="1.5"/>
+    <g fill="#141414" text-anchor="middle" letter-spacing="0.8">
+      <text x="20" y="128">PLAN</text><text x="190" y="78">RESEARCH</text><text x="190" y="178">VERIFY</text>
+      <text x="360" y="128">GATHER</text><text x="490" y="128" fill="#FF4F00">REVIEW</text><text x="620" y="128" fill="#9C9C95">PUBLISH</text>
+    </g>
+    <g fill="#6A6A64" text-anchor="middle" font-size="9">
+      <text x="20" y="142">6S</text><text x="190" y="92">2M40 · $0.41</text><text x="190" y="12" fill="#C49A00">↻ 1 RETRY</text><text x="190" y="192"></text>
+      <text x="360" y="142">ALL 2/2</text><text x="490" y="142">EDITORS · 3M</text>
+    </g>
+  </svg>
+</div>
+
+<div class="m gate">
+  <div class="lbl"><span style="color:var(--orange)">gate · needs you</span><span>2d left</span></div>
+  <div class="q">Approve review → publish?</div>
+  <dl class="kv"><dt>group</dt><dd>editors · member</dd><dt>requested</dt><dd>sa:research/ci</dd><dt>visit</dt><dd>1</dd></dl>
+  <div class="hex"><span>a1</span><span>f3</span><span>76</span><span>93</span><span>10</span><span>1c</span><span>07</span><span>41</span><span>72</span><span>77</span><span>5a</span><span>6e</span><span>cc</span><span>fa</span><span>0a</span><span>3d</span></div>
+  <div class="data"><em>gather.summary</em>"Durable execution means the workflow's progress survives worker loss…"<em style="margin-top:6px">verify.ok · research.sources</em>true · 12 (2 flagged)</div>
+  <div class="keys"><div><span>reject</span><b>R</b></div><div class="go"><span>approve</span><b>A</b></div></div>
+</div>
+
+<div class="m meters">
+  <div class="lbl"><span>levels · research · today</span><span>budget / quota</span></div>
+  <div class="vu"><div class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div><div class="v">$12.40</div><div class="n">cost / $25</div></div>
+  <div class="vu"><div class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="w"></i><i></i><i></i><i></i><i></i></div><div class="v">611k</div><div class="n">tokens / 1M</div></div>
+  <div class="vu"><div class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="v">3</div><div class="n">runs / 10</div></div>
+  <div class="vu"><div class="bars"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="v">3.5</div><div class="n">cpus / 8</div></div>
+</div>
+
+<div class="foot"><span>nodes 2/2 ready</span><span>watch rev 48211</span><span>j k select · a approve · r reject · g graph</span><span class="r">clankr 0.4 · control plane</span></div>
+</body>
+</html>

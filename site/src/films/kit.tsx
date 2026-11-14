@@ -1,71 +1,42 @@
-import type { CSSProperties, ReactNode } from "react"
-import { AbsoluteFill, Easing, interpolate, useCurrentFrame } from "remotion"
+import type { CSSProperties, ReactNode } from 'react'
+import { AbsoluteFill, Easing, interpolate, useVideoConfig } from 'remotion'
 
-export const W = 1600
-export const H = 900
-export const FPS = 30
-export const ease = Easing.bezier(0.16, 1, 0.3, 1)
-export const clamp = { extrapolateLeft: "clamp", extrapolateRight: "clamp" } as const
+export const W = 1600, H = 900, FPS = 30
+export const ease = Easing.bezier(.2, .7, .2, 1)
+export const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const
+export const t = (frame: number, from: number, to: number) => interpolate(frame, [from, to], [0, 1], { ...clamp, easing: ease })
+export const C = { bg: '#1A1C2C', card: '#242740', text: '#FFF1E8', yellow: '#FFD23F', muted: '#A3A7C2', line: '#383C5C', blue: '#29ADFF', red: '#FF004D' }
+export const mono = "'JetBrains Mono', ui-monospace, monospace"
+export const panel: CSSProperties = { border: `2px solid ${C.line}`, background: C.card, borderRadius: 0 }
 
-/** 0→1 between two frames, eased. */
-export const t = (f: number, a: number, b: number, e = ease) => interpolate(f, [a, b], [0, 1], { ...clamp, easing: e })
-
-const GRAIN = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")`
-
-/** A dark stage: a slow-breathing spotlight, a vignette and film grain. */
-export function Stage({ children, glow = "#3a2a1e", x = 50, y = 42 }: { children: ReactNode; glow?: string; x?: number; y?: number }) {
-  const f = useCurrentFrame()
-  const breathe = 1 + Math.sin(f / 40) * 0.04
-  return (
-    <AbsoluteFill style={{ background: "#121310", overflow: "hidden", fontFamily: "'Instrument Sans', system-ui, sans-serif", color: "#efe9dc" }}>
-      <AbsoluteFill style={{ background: `radial-gradient(${46 * breathe}% ${58 * breathe}% at ${x}% ${y}%, ${glow}, transparent 70%)` }} />
-      {children}
-      <AbsoluteFill style={{ background: "radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(0,0,0,.7))", pointerEvents: "none" }} />
-      <AbsoluteFill style={{ backgroundImage: GRAIN, opacity: 0.07, mixBlendMode: "overlay", pointerEvents: "none", transform: `translate(${(f * 37) % 9}px, ${(f * 53) % 7}px)` }} />
-    </AbsoluteFill>
-  )
-}
-
-/** Words that rise out of a blur, one after another, the way launch films set type. */
-export function Words({ text, at, every = 3, size = 84, weight = 600, style, out, head = false }: { text: string; at: number; every?: number; size?: number; weight?: number; style?: CSSProperties; out?: number; head?: boolean }) {
-  const f = useCurrentFrame()
-  const gone = out === undefined ? 0 : t(f, out, out + 18)
-  return (
-    <div style={{ fontSize: size, fontWeight: head ? 900 : weight, fontFamily: head ? "'Archivo', sans-serif" : undefined, textTransform: head ? "uppercase" : undefined, letterSpacing: head ? "-0.04em" : "-0.035em", lineHeight: 1.0, textAlign: "center", opacity: 1 - gone, filter: `blur(${gone * 12}px)`, ...style }}>
-      {text.split(" ").map((w, i) => {
-        const k = t(f, at + i * every, at + i * every + 22)
-        return (
-          <span key={i} style={{ display: "inline-block", whiteSpace: "pre", opacity: k, filter: `blur(${(1 - k) * 14}px)`, transform: `translateY(${(1 - k) * 0.32}em)` }}>
-            {w}{i < text.split(" ").length - 1 ? " " : ""}
-          </span>
-        )
-      })}
+export function Stage({ title, subtitle, phase, phases, children }: { title: string; subtitle: string; phase: number; phases: string[]; children: ReactNode }) {
+  const { width } = useVideoConfig()
+  const compact = width < 1000, pad = compact ? 48 : 72
+  return <AbsoluteFill style={{ background: C.bg, color: C.text, fontFamily: "'Rubik', system-ui, sans-serif", lineHeight: 1.35, overflow: 'hidden' }}>
+    <div style={{ position: 'absolute', left: pad, right: pad, top: compact ? 42 : 48 }}>
+      <div style={{ fontFamily: mono, fontSize: compact ? 20 : 18, color: C.yellow, letterSpacing: 2 }}>CLANKR / IN PRACTICE <span style={{ float: 'right', letterSpacing: 1 }}>ILLUSTRATIVE DEMO</span></div>
+      <h3 style={{ margin: '22px 0 12px', fontFamily: "'Jersey 15', sans-serif", fontSize: compact ? 76 : 88, lineHeight: .95, fontWeight: 400, letterSpacing: 1, textTransform: 'uppercase' }}>{title}</h3>
+      <p style={{ margin: 0, fontSize: compact ? 27 : 28, color: C.muted, lineHeight: 1.4 }}>{subtitle}</p>
     </div>
-  )
+    {children}
+    <div style={{ position: 'absolute', left: pad, right: pad, bottom: 42, display: 'flex', gap: compact ? 16 : 30 }}>
+      {phases.map((name, i) => <div key={name} style={{ flex: 1, borderTop: `3px solid ${i <= phase ? C.yellow : C.line}`, paddingTop: 18, color: i === phase ? C.text : C.muted, fontFamily: mono, fontSize: compact ? 21 : 23 }}><span style={{ opacity: .6, marginRight: 12 }}>0{i + 1}</span>{name}</div>)}
+    </div>
+  </AbsoluteFill>
 }
 
-/** A soft band of light that sweeps across whatever it sits on. */
-export function Sweep({ at, dur = 50, angle = 115, strength = 0.28 }: { at: number; dur?: number; angle?: number; strength?: number }) {
-  const f = useCurrentFrame()
-  const k = interpolate(f, [at, at + dur], [-60, 160], clamp)
-  if (f < at || f > at + dur) return null
-  return <div style={{ position: "absolute", inset: 0, pointerEvents: "none", background: `linear-gradient(${angle}deg, transparent ${k - 22}%, rgba(255,255,255,${strength}) ${k}%, transparent ${k + 22}%)`, mixBlendMode: "screen" }} />
+export function Rail({ from, to, progress, blocked = false }: { from: [number, number]; to: [number, number]; progress?: number; blocked?: boolean }) {
+  return <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible' }} aria-hidden="true">
+    <path d={`M${from.join(',')} L${to.join(',')}`} fill="none" stroke={blocked ? C.red : C.line} strokeWidth="3" strokeDasharray={blocked ? '7 7' : undefined} />
+    {progress !== undefined && <circle cx={from[0] + (to[0] - from[0]) * progress} cy={from[1] + (to[1] - from[1]) * progress} r="7" fill={blocked ? C.red : C.yellow} />}
+  </svg>
 }
 
-/** The helper itself: a warm, breathing light. */
-export function Orb({ size = 120, x = 0, y = 0, heat = 1 }: { size?: number; x?: number; y?: number; heat?: number }) {
-  const f = useCurrentFrame()
-  const s = 1 + Math.sin(f / 18) * 0.04
-  return (
-    <div style={{ position: "absolute", left: "50%", top: "50%", width: size, height: size, marginLeft: -size / 2, marginTop: -size / 2, transform: `translate(${x}px, ${y}px) scale(${s})`, borderRadius: "50%",
-      background: "radial-gradient(circle at 38% 34%, #fff6ea 0%, #ffc08a 18%, #ff7a3d 46%, #c2410c 78%, #7a2408 100%)",
-      boxShadow: `0 0 ${60 * heat}px ${18 * heat}px rgba(255,122,61,.45), 0 0 ${180 * heat}px ${60 * heat}px rgba(255,122,61,.18)` }} />
-  )
-}
-
-/** A small caption, set like a launch film's lower third. */
-export function Lower({ text, at, out, style }: { text: string; at: number; out?: number; style?: CSSProperties }) {
-  const f = useCurrentFrame()
-  const k = t(f, at, at + 24) * (out === undefined ? 1 : 1 - t(f, out, out + 18))
-  return <div style={{ position: "absolute", left: 0, right: 0, textAlign: "center", fontSize: 26, color: "rgba(239,233,220,.62)", letterSpacing: "0.01em", opacity: k, transform: `translateY(${(1 - k) * 10}px)`, ...style }}>{text}</div>
+export function EventBar({ event, detail, success = false }: { event: string; detail: string; success?: boolean }) {
+  const { width } = useVideoConfig(), compact = width < 1000
+  return <div style={{ position: 'absolute', left: compact ? 48 : 72, right: compact ? 48 : 72, bottom: compact ? 134 : 132, height: compact ? 80 : 88, background: '#0D0E16', color: C.text, border: `2px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 20, padding: '0 26px', fontFamily: mono }}>
+    <span style={{ color: success ? C.blue : C.yellow, fontSize: compact ? 26 : 30 }}>{success ? '✓' : '›'}</span>
+    <span style={{ fontSize: compact ? 26 : 29 }}>{event}</span>
+    <span style={{ marginLeft: 'auto', fontSize: compact ? 21 : 23, color: C.muted }}>{detail}</span>
+  </div>
 }

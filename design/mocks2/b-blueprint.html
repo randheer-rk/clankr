@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>B · Blueprint</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--paper:#f3f1ea;--ink:#141a2a;--blue:#1f3a93;--blue2:#5b6fc0;--rule:#cfd3df;--mute:#5d6577;--ember:#e4521b;--mono:"JetBrains Mono",monospace;--sans:"Instrument Sans",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
+ background-image:linear-gradient(var(--rule) 1px,transparent 1px),linear-gradient(90deg,var(--rule) 1px,transparent 1px);background-size:64px 64px;background-position:-1px -1px}
+body::before{content:"";position:fixed;inset:0;background:var(--paper);opacity:.55;pointer-events:none;z-index:-1}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1280px;margin:0 auto;padding:0 40px}
+.top{display:flex;align-items:baseline;gap:30px;padding:26px 0;border-bottom:2px solid var(--ink);font:13px var(--mono);text-transform:uppercase;letter-spacing:.08em}
+.top .wm{font:600 20px var(--sans);letter-spacing:-.03em;text-transform:none;margin-right:auto}
+.top .wm small{font:12px var(--mono);color:var(--mute);margin-left:12px;letter-spacing:.06em}
+.hero{display:grid;grid-template-columns:5fr 7fr;gap:50px;padding:70px 0 40px;align-items:start}
+.spec{font:12px var(--mono);color:var(--blue);letter-spacing:.1em;text-transform:uppercase;margin-bottom:18px}
+h1{font-size:58px;line-height:1;letter-spacing:-.04em;font-weight:600;margin:0 0 22px}
+.lede{font-size:18px;color:var(--mute);margin:0 0 28px;max-width:460px}
+.btn{display:inline-block;font:500 14px var(--mono);background:var(--ink);color:var(--paper);padding:12px 18px;border-radius:3px;margin-right:10px}
+.btn.o{background:transparent;color:var(--ink);border:1.5px solid var(--ink)}
+.dwg{position:relative;border:1.5px solid var(--ink);background:rgba(255,255,255,.55);padding:20px}
+.dwg .cap{position:absolute;left:-1.5px;bottom:-30px;font:11px var(--mono);letter-spacing:.1em;color:var(--mute)}
+.dwg .tb{position:absolute;right:0;bottom:0;display:grid;grid-template-columns:auto auto;border-left:1.5px solid var(--ink);border-top:1.5px solid var(--ink);font:10px/1.5 var(--mono);text-transform:uppercase;letter-spacing:.08em}
+.dwg .tb span{padding:5px 10px;border-bottom:1px solid var(--rule)}.dwg .tb span:nth-child(odd){color:var(--mute);border-right:1px solid var(--rule)}
+svg text{font:11px var(--mono);fill:var(--ink)}svg .l{fill:var(--mute)}svg .b{fill:var(--blue)}
+.legend{display:grid;grid-template-columns:repeat(5,1fr);border:1.5px solid var(--ink);border-top:0;background:rgba(255,255,255,.6)}
+.legend div{padding:16px 18px;border-right:1px solid var(--rule);font-size:14px}.legend div:last-child{border-right:0}
+.legend b{display:block;font:12px var(--mono);color:var(--blue);margin-bottom:6px}
+.legend p{margin:0;color:var(--mute);font-size:13px}
+.sheet{margin:80px 0 90px;border-top:2px solid var(--ink)}
+.sheet h2{font-size:34px;letter-spacing:-.035em;margin:30px 0 24px;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:15px}
+th{text-align:left;font:11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--mute);padding:10px 0;border-bottom:1.5px solid var(--ink);font-weight:400}
+td{padding:16px 24px 16px 0;border-bottom:1px solid var(--rule);vertical-align:top}
+td:first-child{font:13px var(--mono);color:var(--blue);width:60px}
+td:nth-child(2){font-weight:600;width:300px;letter-spacing:-.01em}
+td:nth-child(3){color:var(--mute)}
+td code{font:13px var(--mono);color:var(--ink);background:rgba(31,58,147,.08);padding:1px 5px;border-radius:3px}
+</style></head><body>
+<div class="wrap">
+<div class="top"><span class="wm">clankr <small>SHEET 1 / 6 · ORCHESTRATION ENGINE FOR AI AGENTS</small></span><a>Quick start</a><a>Architecture</a><a>Resources</a><a>ADRs</a><a>GitHub</a></div>
+
+<section class="hero">
+  <div>
+    <div class="spec">Fig. 1 — System, exploded</div>
+    <h1>Agents, described like infrastructure. Run like it, too.</h1>
+    <p class="lede">You write agents and workflows as resources. Clankr schedules them onto your machines in sandboxes, keeps every step in Postgres so nothing is lost on a crash, and sits between agents and every model, tool and credential they use.</p>
+    <a class="btn">cargo build && clankrd --dev</a><a class="btn o">Read the design notes →</a>
+  </div>
+  <div>
+    <div class="dwg">
+      <svg viewBox="0 0 640 400" width="100%">
+        <defs><marker id="a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4 0 8z" fill="#141a2a"/></marker></defs>
+        <!-- control plane -->
+        <rect x="200" y="30" width="240" height="110" fill="none" stroke="#141a2a" stroke-width="1.5"/>
+        <text x="212" y="50">clankrd</text><text x="212" y="66" class="l">API · engine · scheduler · gateway</text>
+        <rect x="212" y="80" width="100" height="44" fill="none" stroke="#1f3a93" stroke-dasharray="3 3"/><text x="220" y="98" class="b">workflow</text><text x="220" y="112" class="b">engine</text>
+        <rect x="326" y="80" width="100" height="44" fill="none" stroke="#1f3a93" stroke-dasharray="3 3"/><text x="334" y="98" class="b">approvals</text><text x="334" y="112" class="b">inbox</text>
+        <!-- postgres -->
+        <ellipse cx="560" cy="60" rx="50" ry="12" fill="none" stroke="#141a2a" stroke-width="1.5"/><path d="M510 60v50a50 12 0 0 0 100 0V60" fill="none" stroke="#141a2a" stroke-width="1.5"/>
+        <text x="528" y="92">postgres</text><text x="516" y="135" class="l">events · leases · audit</text>
+        <line x1="440" y1="85" x2="508" y2="85" stroke="#141a2a" stroke-width="1.5" marker-end="url(#a)"/>
+        <!-- people -->
+        <rect x="30" y="50" width="120" height="60" fill="none" stroke="#141a2a" stroke-width="1.5"/><text x="42" y="72">clank · UI · API</text><text x="42" y="90" class="l">you</text>
+        <line x1="150" y1="80" x2="198" y2="80" stroke="#141a2a" stroke-width="1.5" marker-end="url(#a)"/>
+        <!-- nodes -->
+        <g>
+          <rect x="60" y="230" width="220" height="130" fill="none" stroke="#141a2a" stroke-width="1.5"/>
+          <text x="72" y="250">node eu-1</text><text x="72" y="266" class="l">clankr-node · gateway</text>
+          <rect x="72" y="282" width="92" height="62" fill="none" stroke="#141a2a"/><text x="80" y="300" class="b">sandbox</text><text x="80" y="316" class="l">writer</text><text x="80" y="332" class="l">microVM</text>
+          <rect x="176" y="282" width="92" height="62" fill="none" stroke="#141a2a"/><text x="184" y="300" class="b">sandbox</text><text x="184" y="316" class="l">reviewer</text><text x="184" y="332" class="l">gVisor</text>
+          <line x1="170" y1="228" x2="250" y2="142" stroke="#141a2a" stroke-width="1.5" marker-end="url(#a)"/><text x="150" y="190" class="l">dials in · mTLS</text>
+        </g>
+        <g>
+          <rect x="340" y="230" width="220" height="130" fill="none" stroke="#141a2a" stroke-width="1.5"/>
+          <text x="352" y="250">node eu-2</text><text x="352" y="266" class="l">clankr-node · gateway</text>
+          <rect x="352" y="282" width="92" height="62" fill="none" stroke="#141a2a"/><text x="360" y="300" class="b">sandbox</text><text x="360" y="316" class="l">indexer</text><text x="360" y="332" class="l">container</text>
+          <rect x="456" y="282" width="92" height="62" fill="none" stroke="#141a2a" stroke-dasharray="3 3"/><text x="464" y="300" class="l">(free)</text>
+          <line x1="440" y1="228" x2="380" y2="142" stroke="#141a2a" stroke-width="1.5" marker-end="url(#a)"/>
+        </g>
+        <!-- outside world -->
+        <rect x="585" y="200" width="40" height="90" fill="none" stroke="#e4521b" stroke-width="1.5"/><text x="597" y="250" transform="rotate(90 597 250)" style="fill:#e4521b">models · tools</text>
+        <line x1="280" y1="300" x2="340" y2="300" stroke="#141a2a" stroke-dasharray="4 3"/><text x="286" y="292" class="l">messages</text>
+        <line x1="560" y1="245" x2="583" y2="245" stroke="#e4521b" stroke-width="1.5" marker-end="url(#a)"/>
+        <!-- callouts -->
+        <g font-weight="600"><circle cx="200" cy="30" r="9" fill="#141a2a"/><text x="196.5" y="34" style="fill:#f3f1ea">1</text>
+        <circle cx="560" cy="48" r="9" fill="#141a2a"/><text x="556.5" y="52" style="fill:#f3f1ea">2</text>
+        <circle cx="60" cy="230" r="9" fill="#141a2a"/><text x="56.5" y="234" style="fill:#f3f1ea">3</text>
+        <circle cx="72" cy="282" r="9" fill="#141a2a"/><text x="68.5" y="286" style="fill:#f3f1ea">4</text>
+        <circle cx="585" cy="200" r="9" fill="#141a2a"/><text x="581.5" y="204" style="fill:#f3f1ea">5</text></g>
+      </svg>
+      <div class="tb"><span>drawn</span><span>2026-11</span><span>scale</span><span>one cluster</span><span>rev</span><span>0.1.0</span></div>
+    </div>
+    <div class="legend">
+      <div><b>1 · clankrd</b><p>The control plane. One binary.</p></div>
+      <div><b>2 · Postgres</b><p>Truth and message bus. No broker.</p></div>
+      <div><b>3 · node</b><p>A daemon per machine. Dials in.</p></div>
+      <div><b>4 · sandbox</b><p>Container, gVisor or microVM.</p></div>
+      <div><b>5 · gateway</b><p>Holds keys. Agents never do.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="sheet">
+  <h2>What breaks at scale, and what the engine does about it</h2>
+  <table>
+    <tr><th>Ref</th><th>Failure</th><th>Response</th></tr>
+    <tr><td>F-01</td><td>A node dies three hours into a job</td><td>Workflow state is event-sourced. Each step commits with the work it schedules, so the run resumes at the last committed event on another node. Replay calls no model twice. <code>epoch</code>-fenced leases reject stale writes.</td></tr>
+    <tr><td>F-02</td><td>An agent runs code you didn't write</td><td>Rootless container, gVisor or Firecracker microVM, read-only, no network unless granted. Listed hosts go through a per-agent proxy; everything else is refused and logged.</td></tr>
+    <tr><td>F-03</td><td>A loop spends the month's budget by lunch</td><td>Tokens are reserved from a budget before every model call and settled after, per namespace and per run. The gateway refuses when the budget is gone.</td></tr>
+    <tr><td>F-04</td><td>An action needs a person</td><td>Approval steps and approval-gated tools park the run in an inbox. Who said yes, and when, is in the audit log.</td></tr>
+    <tr><td>F-05</td><td>"What exactly happened?"</td><td>Every run has a complete event history. View it as it stood after any event, or fork a new run from there. Privileged actions are hash-chained and shipped off-site; <code>clank audit-check</code> verifies them.</td></tr>
+  </table>
+</section>
+</div>
+</body></html>
