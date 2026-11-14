@@ -45,7 +45,7 @@ fn ok(o: Output) -> String {
     String::from_utf8(o.stdout).unwrap()
 }
 
-/// A dev worker answering the queue with a small python program (`quality` picks good or bad).
+/// A dev worker answering the queue with a small python program (`good` picks which).
 fn worker(c: &Cluster, token: &str, good: bool) -> Child {
     let prog = if good {
         r#"import json,sys; i=json.load(sys.stdin)["input"]; print(json.dumps({"answer": i["q"].upper(), "sources": 3}))"#

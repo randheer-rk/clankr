@@ -124,7 +124,6 @@ impl Store {
 /// A point in a claim's history to read context at.
 #[derive(Debug, Clone)]
 pub enum AsOf {
-    /// A named snapshot.
     Snapshot(String),
     /// Everything written up to and including this moment.
     Time(DateTime<Utc>),

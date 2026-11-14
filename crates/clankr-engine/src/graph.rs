@@ -87,7 +87,6 @@ pub enum NodeKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout: Option<String>,
     },
-    /// Waits for a named signal.
     Signal { signal: String },
 }
 

@@ -1,13 +1,4 @@
-//! Context API over a bound ContextClaim (PRD §29).
-//!
-//!   GET    /v1/namespaces/{ns}/contexts/{claim}/keys?prefix=&limit=
-//!   GET    /v1/namespaces/{ns}/contexts/{claim}/keys/{*key}
-//!   PUT    /v1/namespaces/{ns}/contexts/{claim}/keys/{*key}   {value, ifVersion?}  (ifVersion 0 = create only)
-//!   DELETE /v1/namespaces/{ns}/contexts/{claim}/keys/{*key}?ifVersion=
-//!   GET    /v1/namespaces/{ns}/contexts/{claim}/keys?asOf=<rfc3339>|snapshot=<name>   context back then
-//!   GET    /v1/namespaces/{ns}/contexts/{claim}/snapshots
-//!   POST   /v1/namespaces/{ns}/contexts/{claim}/snapshots                {name}
-//!   POST   /v1/namespaces/{ns}/contexts/{claim}/snapshots/{name}/restore
+//! Context API over a bound ContextClaim (PRD §29). A PUT with `ifVersion` 0 is create-only.
 
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -33,10 +24,8 @@ async fn claim(s: &AppState, ns: &str, claim: &str) -> Result<(), ApiError> {
     s.store.get(ns, "ContextClaim", claim).await.map(drop)
 }
 
-/// Writer recorded for provenance. A node daemon proxying for an agent names it in
-/// `x-clankr-on-behalf-of`.
-/// Verified workload claims win; the header (single-node daemons without a workload identity)
-/// only labels below the authenticated actor, so it can't attribute a write to anyone else.
+/// Writer recorded for provenance. Verified workload claims win; `x-clankr-on-behalf-of` (single-node daemons without a
+/// workload identity) only labels below the authenticated actor, so it can't attribute a write to anyone else.
 pub(crate) fn writer(ctx: &RequestCtx, headers: &HeaderMap, claims: Option<&crate::identity::Claims>) -> String {
     if let Some(c) = claims {
         return format!("{}/agent/{}/{}", ctx.actor, c.agent, c.instance);

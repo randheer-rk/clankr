@@ -80,7 +80,6 @@ fn research_graph_end_to_end() {
 
     // duplicate delivery of an already-applied result is refused, not double-applied
     assert_eq!(s.complete("research#1.1", json!({})), Err(Reject::UnknownTask("research#1.1".into())));
-    // a signal nobody waits for is refused
     assert!(matches!(s.input(Event::SignalReceived { signal: "nope".into(), payload: json!({}) }), Err(Reject::NotWaiting(_))));
 
     s.input(Event::SignalReceived { signal: approval_signal("review"), payload: json!({"approved": true, "by": "ed"}) }).unwrap();

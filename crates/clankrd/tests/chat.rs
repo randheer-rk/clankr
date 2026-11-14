@@ -191,8 +191,7 @@ async fn slack_socket_mode_round_trip() {
             // wait for the approval card, then press its button
             loop {
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                let press = std::env::var("CLANKR_TEST_PRESS").ok();
-                if let Some(data) = press {
+                if let Ok(data) = std::env::var("CLANKR_TEST_PRESS") {
                     s.send(text(json!({"type": "interactive", "envelope_id": "e3", "payload": {"type": "block_actions", "user": {"id": "U7"}, "channel": {"id": "C42"}, "actions": [{"action_id": data, "value": data}]}}))).await.unwrap();
                     break;
                 }

@@ -109,15 +109,14 @@ pub async fn run_fleet(cfg: FleetConfig, mut shutdown: watch::Receiver<bool>) ->
             });
         }
         // stop what's no longer ours (or was reassigned and came back with a new epoch)
-        let ids: Vec<String> = running.keys().cloned().collect();
-        for id in ids {
-            let keep = want.iter().any(|a| a.id == id && a.epoch == running[&id].epoch);
+        running.retain(|id, r| {
+            let keep = want.iter().any(|a| a.id == *id && a.epoch == r.epoch);
             if !keep {
-                let r = running.remove(&id).unwrap();
                 let _ = r.stop.send(true);
                 tracing::info!(instance = %id, "instance unassigned; stopping");
             }
-        }
+            keep
+        });
         for a in want {
             // a crash-looped instance stays down on this epoch (reassignment gives it a new one)
             if let Some(r) = running.get_mut(&a.id).filter(|r| r.task.is_finished()) {

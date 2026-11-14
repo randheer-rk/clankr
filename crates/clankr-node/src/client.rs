@@ -13,8 +13,7 @@ use serde_json::{Value, json};
 /// One HTTP client shared by a node's instances, swapped in place when the node cert rotates.
 pub type SharedHttp = Arc<RwLock<reqwest::Client>>;
 
-/// The control plane's replicas (`--server a,b,c`). Calls go to the last one that worked; a
-/// replica that can't be reached is skipped in favour of the next (HA failover).
+/// The control plane's replicas (`--server a,b,c`): calls go to the last one that worked, skipping unreachable ones (HA failover).
 #[derive(Clone, Debug)]
 pub struct Endpoints(Arc<(Vec<String>, AtomicUsize)>);
 
@@ -106,7 +105,7 @@ pub struct Client {
     workload: Option<Arc<RwLock<String>>>,
 }
 
-/// mTLS material for a fleet node: the cluster CA to trust and this node's client identity.
+/// mTLS material for a fleet node.
 #[derive(Clone)]
 pub struct NodeTls {
     pub ca: reqwest::Certificate,
@@ -134,8 +133,7 @@ pub struct Assignment {
     pub epoch: i64,
     /// Workload identity token for this instance (short-lived; refreshed every heartbeat).
     pub identity: String,
-    /// The exact Agent spec to run (a canary holds others on an older one). Absent from older
-    /// control planes; then the instance runs the Agent's current spec.
+    /// The exact Agent spec to run (a canary holds others on an older one); absent from older control planes, meaning the Agent's current spec.
     #[serde(default)]
     pub agent_spec: Option<serde_json::Value>,
     /// The deployment is hibernating: checkpoint and stop.
@@ -331,8 +329,7 @@ impl Client {
         self.call(Method::POST, &format!("/topics/{}/publish", encode_key(topic)), Some(body), Some(who)).await
     }
 
-    /// Joins the cluster: sends a CSR for a key generated here, returns the node's client
-    /// identity (certificate + key) and its certificate PEM. The key never leaves this process.
+    /// Joins the cluster with a CSR for a key generated here (the key never leaves this process); returns the node's client identity and certificate PEM.
     pub async fn join(servers: &Endpoints, ca: &reqwest::Certificate, name: &str, join_token: &str, capacity: &Value, labels: &Value) -> Result<(reqwest::Identity, String), ApiError> {
         let (key, csr) = clankr_tls::node_key_and_csr(name).map_err(|e| ApiError::new(ErrorCode::InvalidSpec, e.to_string()))?;
         let http = NodeTls { ca: ca.clone(), identity: None }.client(Duration::from_secs(30));
@@ -360,9 +357,7 @@ impl Client {
         identity(&v, &key)
     }
 
-    /// Heartbeat over mTLS; returns this node's current assignments with fresh identity tokens.
-    /// `report` is `{"instances": [{id, epoch, ready}]}`.
-    /// Assignments, plus `clank exec` sessions waiting for this node.
+    /// Heartbeat over mTLS (`report` is `{"instances": [{id, epoch, ready}]}`); returns this node's assignments with fresh identity tokens, plus `clank exec` sessions waiting for it.
     pub async fn node_heartbeat(servers: &Endpoints, tls: &NodeTls, name: &str, report: &Value) -> Result<(Vec<Assignment>, Vec<crate::exec::ExecRequest>), ApiError> {
         let http = tls.client(Duration::from_secs(10));
         let v = servers

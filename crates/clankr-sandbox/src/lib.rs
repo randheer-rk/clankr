@@ -111,8 +111,7 @@ impl Sandbox {
             cmd.arg("--").args(&c.command);
         }
         let child = cmd
-            // the container sees only -e values; kennel itself needs the session env (cgroups via
-            // systemd), so just keep the control plane's own secrets away from it
+            // kennel needs the session env (cgroups via systemd), so only the control plane's own secrets are removed
             .env_remove("DATABASE_URL")
             .env_remove("CLANKR_TOKEN")
             .env_remove("CLANKR_JOIN_TOKEN")

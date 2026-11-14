@@ -59,9 +59,8 @@ pub(crate) async fn authorize(s: &AppState, p: &Principal, method: &str, path: &
     Err(format!("{} lacks {perm:?} in {at}", p.actor()))
 }
 
-/// All RoleBindings as of a store revision. Each request costs one primary-key read of the
-/// revision; bindings are re-listed only after some resource changed, so a revoked binding
-/// stops working on the very next request.
+/// All RoleBindings as of a store revision: each request reads the revision and re-lists only if it moved,
+/// so a revoked binding stops working on the very next request.
 #[derive(Clone, Default)]
 pub struct BindingCache(Arc<Mutex<Option<(i64, Bindings)>>>);
 
@@ -119,8 +118,7 @@ impl Oidc {
         serde_json::from_value(get(uri.to_owned()).await?).map_err(|e| format!("jwks: {e}"))
     }
 
-    /// The key for `kid`, refetching the set (at most every 30s) when it's unknown, so IdP key
-    /// rotation is picked up without a restart.
+    /// The key for `kid`; an unknown one refetches the set (at most every `min_refresh`), so IdP key rotation needs no restart.
     async fn key(&self, kid: &str) -> Result<DecodingKey, String> {
         let mut keys = self.keys.lock().await;
         let stale = keys.as_ref().is_none_or(|(set, at)| set.find(kid).is_none() && at.elapsed() > self.min_refresh);

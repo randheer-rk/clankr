@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{ApiError, ErrorCode};
+use crate::{ApiError, invalid};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -62,10 +62,6 @@ pub struct ApprovalCards {
 
 fn default_reply_timeout() -> u64 {
     120
-}
-
-fn invalid(field: &str, m: impl Into<String>) -> ApiError {
-    ApiError::new(ErrorCode::InvalidSpec, m).field(field)
 }
 
 pub fn admit_chat_connector(spec: &Value) -> Result<ChatConnectorSpec, ApiError> {

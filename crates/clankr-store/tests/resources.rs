@@ -45,7 +45,6 @@ async fn crud_cas_generation_and_status() {
     let c = s.update(&ctx(), c).await.unwrap();
     assert_eq!(c.metadata.generation, 2);
 
-    // stale writer loses
     let mut stale = b.clone();
     stale.spec = json!({"image": "x@sha256:3"});
     assert_eq!(s.update(&ctx(), stale).await.unwrap_err().code, ErrorCode::Conflict);

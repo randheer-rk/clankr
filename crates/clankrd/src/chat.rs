@@ -262,8 +262,6 @@ impl Connector {
         }
     }
 
-    // ── Telegram ──────────────────────────────────────────────────────────────
-
     async fn telegram(&mut self) -> Result<(), ApiError> {
         let base = chat::base(ChatKind::Telegram, &self.spec.endpoint);
         let mut offset = self.status["telegram"]["offset"].as_i64().unwrap_or(0);
@@ -301,8 +299,6 @@ impl Connector {
             }
         }
     }
-
-    // ── Slack (Socket Mode) ───────────────────────────────────────────────────
 
     async fn slack(&mut self, app_token: &str) -> Result<(), ApiError> {
         let base = chat::base(ChatKind::Slack, &self.spec.endpoint);
@@ -376,8 +372,7 @@ impl Connector {
     }
 }
 
-/// What a service's reply reads as in a chat: a string as is, `{text}` by its text, anything
-/// else as JSON.
+/// A service's reply as chat text: a string as is, `{text}` by its text, anything else as JSON.
 fn reply_text(reply: &Value) -> String {
     match reply {
         Value::String(s) => s.clone(),

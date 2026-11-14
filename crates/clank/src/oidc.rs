@@ -120,10 +120,10 @@ pub fn bearer(path: &Path) -> Result<Option<String>> {
     if expiry(&s.id_token).is_some_and(|exp| exp > now + 60) {
         return Ok(Some(s.id_token));
     }
-    let Some(refresh) = s.refresh_token.clone() else { bail!("login expired; run clank login") };
+    let Some(refresh) = s.refresh_token.as_deref() else { bail!("login expired; run clank login") };
     let c = http()?;
     let url = endpoint(&discover(&c, &s.issuer)?, "token_endpoint")?;
-    let t = token_request(&c, &url, &[("grant_type", "refresh_token"), ("refresh_token", &refresh), ("client_id", &s.client_id)])?
+    let t = token_request(&c, &url, &[("grant_type", "refresh_token"), ("refresh_token", refresh), ("client_id", &s.client_id)])?
         .map_err(|e| anyhow::anyhow!("login expired ({e}); run clank login"))?;
     s.id_token = t["id_token"].as_str().context("refresh returned no id_token; run clank login")?.to_owned();
     if let Some(r) = t["refresh_token"].as_str() {

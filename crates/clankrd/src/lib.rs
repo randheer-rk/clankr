@@ -1,14 +1,5 @@
 //! Management REST API (PRD §35): resource CRUD, status subresource, SSE watch, health.
 //!
-//!   GET    /v1/{plural}                               list across namespaces
-//!   GET    /v1/namespaces/{ns}/{plural}               list (?labelSelector=k=v,..  ?watch=true&cursor=N)
-//!   POST   /v1/namespaces/{ns}/{plural}               create (?dryRun=true)
-//!   GET    /v1/namespaces/{ns}/{plural}/{name}
-//!   PUT    /v1/namespaces/{ns}/{plural}/{name}        CAS on metadata.resourceVersion (?dryRun=true)
-//!   PUT    /v1/namespaces/{ns}/{plural}/{name}/status
-//!   DELETE /v1/namespaces/{ns}/{plural}/{name}        (?resourceVersion=N)
-//!   GET    /v1/audit                                  (?after=SEQ&limit=N)
-//!
 //! Every response carries `x-request-id` (client-supplied if well-formed, else generated).
 
 use std::collections::BTreeMap;
@@ -215,8 +206,7 @@ async fn auth(State(s): State<AppState>, mut req: Request, next: Next) -> Respon
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    // nodes authenticate with their client certificate (mTLS); the fingerprint must be the
-    // one we last issued to that node, so re-joining revokes older certificates
+    // mTLS: the fingerprint must be the one last issued to that node, so re-joining revokes older certificates
     let peer = req.extensions().get::<Option<tls::PeerCert>>().cloned().flatten();
     let node = match &peer {
         Some(p) => s.store.node_for_credential(&p.fingerprint).await.ok().flatten(),
@@ -272,8 +262,7 @@ async fn auth(State(s): State<AppState>, mut req: Request, next: Next) -> Respon
         }
         _ => {
             let ctx = RequestCtx { actor: "anonymous".into(), request_id: request_id.clone() };
-            // a flood of bad tokens can't flood the audit log: past the budget, denials are
-            // counted and recorded as one summary row per window
+            // bad tokens can't flood the audit log: past the budget, denials become one summary row per window
             let (record, suppressed) = anon_audit_budget(std::time::Instant::now());
             if suppressed > 0 {
                 let _ = s.store.audit_deny(&ctx, "unauthenticated requests", &format!("{suppressed} more denials (missing or invalid bearer token) not recorded individually")).await;
@@ -295,8 +284,7 @@ async fn auth(State(s): State<AppState>, mut req: Request, next: Next) -> Respon
 const ANON_AUDIT_PER_SEC: u32 = 20;
 static ANON_AUDIT: std::sync::Mutex<Option<(std::time::Instant, u32, u64)>> = std::sync::Mutex::new(None);
 
-/// Whether to audit this denial individually, and how many the last window suppressed (to be
-/// recorded now, once).
+/// Whether to audit this denial individually, and how many the last window suppressed (recorded once, now).
 pub(crate) fn anon_audit_budget(now: std::time::Instant) -> (bool, u64) {
     let mut g = ANON_AUDIT.lock().unwrap();
     let (start, n, dropped) = g.get_or_insert((now, 0, 0));
@@ -319,8 +307,7 @@ pub fn node_of(ctx: &RequestCtx) -> Option<&str> {
     ctx.actor.strip_prefix(NODE_PREFIX)
 }
 
-/// Paths a node credential may call (CL-31-03, least privilege): its own heartbeat, reading the
-/// Agents it runs, and brokering tasks/models/contexts for them.
+/// Paths a node credential may call (CL-31-03, least privilege).
 fn node_route_allowed(node: &str, method: &axum::http::Method, path: &str) -> bool {
     let seg: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     match seg.as_slice() {
@@ -341,10 +328,8 @@ fn node_route_allowed(node: &str, method: &axum::http::Method, path: &str) -> bo
     }
 }
 
-/// For calls from a node: the verified workload identity they act under. The token must be
-/// ours, unexpired, issued to this node for `ns` (and `agent`, if given), and the instance must
-/// still be placed on this node at the token's epoch, so a node that lost an instance (moved
-/// after a partition) is refused immediately. Owners get None: no workload scoping.
+/// The verified workload identity a node call acts under; None for non-node callers (no workload scoping).
+/// The instance must still be placed on this node at the token's epoch, so a node that lost it is refused at once.
 pub(crate) async fn workload(s: &AppState, ctx: &RequestCtx, headers: &axum::http::HeaderMap, ns: &str, agent: Option<&str>) -> Result<Option<identity::Claims>, ApiError> {
     let Some(node) = node_of(ctx) else { return Ok(None) };
     let token = headers
@@ -390,8 +375,7 @@ fn check_target(r: &Resource, ns: &str, kind: &str, name: Option<&str>) -> Resul
     admit_kind(r)
 }
 
-/// Kinds the type system names (from the PRD) that nothing acts on yet. They're refused rather
-/// than stored, so creating one never silently does nothing.
+/// Kinds the PRD names that nothing acts on yet: refused, so creating one never silently does nothing.
 const NOT_BUILT: &[&str] = &[
     "AgentRevision", "AgentPool", "AgentJob", "AgentSession", "AgentIdentity", "AgentSupervisor", "AgentGroup", "AgentCapability", "AgentNetwork",
     "AgentLease", "AgentCheckpoint", "ApprovalTask", "TaskQueue", "StorageClass", "PersistentVolume", "VolumeBinding", "VolumeSnapshot", "ContextStore",
@@ -482,8 +466,7 @@ async fn list_impl(State(s): State<AppState>, ns: Option<String>, plural: String
     Ok(Json(serde_json::json!({ "items": items, "resourceVersion": rev })).into_response())
 }
 
-/// SSE stream of WatchEvents (event id = revision, CL-35-03). Without a cursor it starts with
-/// the current list as Added events. An expired cursor yields one `error` event (HistoryExpired).
+/// SSE WatchEvents (event id = revision, CL-35-03). No cursor: starts with the current list as Added events; an expired one yields one `error` event.
 async fn watch_stream(
     s: AppState,
     kind: &'static str,

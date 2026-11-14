@@ -85,7 +85,6 @@ async fn promote_gate_roll_out_and_roll_back() {
     assert!(st == StatusCode::UNPROCESSABLE_ENTITY && e["message"].as_str().unwrap().contains("promote instead"), "{e}");
     assert_eq!(s.call(OWNER, M::POST, "/agents", Some(agent(&format!("{REPO}@{d1}")))).await.0, StatusCode::CREATED);
 
-    // a running deployment of it
     s.store.register_node("node-a", "cred", &json!({}), &json!({"memoryMiB": 4096, "cpus": 4.0, "runtimes": ["oci"]})).await.unwrap();
     assert_eq!(s.call(OWNER, M::POST, "/agentdeployments", Some(res("AgentDeployment", "researcher", json!({"agent": "researcher", "replicas": 1})))).await.0, StatusCode::CREATED);
     let lead = s.store.acquire_leadership("scheduler", "test", 30.0).await.unwrap().unwrap();
@@ -93,7 +92,6 @@ async fn promote_gate_roll_out_and_roll_back() {
     let before = s.store.instances().await.unwrap().remove(0);
     assert_eq!(before.node.as_deref(), Some("node-a"));
 
-    // only admins promote
     s.call(OWNER, M::POST, "/serviceaccounts", Some(res("ServiceAccount", "ci", json!({})))).await;
     s.call(OWNER, M::POST, "/rolebindings", Some(res("RoleBinding", "ci", json!({"role": "editor", "subjects": [format!("serviceaccount:{NS}/ci")]})))).await;
     let (_, t) = s.call(OWNER, M::POST, "/serviceaccounts/ci/tokens", Some(json!({}))).await;

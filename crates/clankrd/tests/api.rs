@@ -76,7 +76,7 @@ async fn crud_errors_and_auth() {
     assert_eq!(s.req(M::GET, "/v1/namespaces/research/widgets").send().await.unwrap().status(), StatusCode::NOT_FOUND);
 
     // CAS: update with current rv succeeds, replaying the old rv conflicts
-    let mut upd = created.clone();
+    let mut upd = created;
     upd["spec"] = agent("a", "x@2")["spec"].clone();
     let r = s.req(M::PUT, &format!("{AGENTS}/a")).json(&upd).send().await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);

@@ -118,6 +118,10 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+pub(crate) fn invalid(field: &str, m: impl Into<String>) -> ApiError {
+    ApiError::new(ErrorCode::InvalidSpec, m).field(field)
+}
+
 /// Who is acting and under which request; carried into every audit record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestCtx {
@@ -125,7 +129,6 @@ pub struct RequestCtx {
     pub request_id: String,
 }
 
-/// One entry in the watch stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WatchEvent {

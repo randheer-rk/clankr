@@ -16,8 +16,7 @@ pub fn data_of(message: &Value) -> Option<Value> {
     message["parts"].as_array().into_iter().flatten().find_map(|p| p.get("data").cloned())
 }
 
-/// Parts for a reply: a string is one text part; `{text, …}` is a text part plus the rest as
-/// data; anything else is one data part.
+/// Parts for a reply: a string is one text part; `{text, …}` is a text part plus the rest as data; anything else is one data part.
 pub fn parts_for(reply: &Value) -> Vec<Value> {
     match reply {
         Value::String(s) => vec![json!({"text": s})],
@@ -53,8 +52,7 @@ pub async fn rpc(http: &reqwest::Client, url: &str, auth: Option<(&str, &str)>, 
     Ok(body["result"].clone())
 }
 
-/// Sends one message and waits for the answer: a Message, or a Task polled until it's done.
-/// `deadline` bounds the polling; the tool's timeout cuts the whole call anyway.
+/// Sends one message and waits for the answer: a Message, or a Task polled until it's done or `deadline` passes.
 pub async fn send_and_wait(http: &reqwest::Client, url: &str, auth: Option<(&str, &str)>, text: Option<&str>, data: Option<&Value>, deadline: std::time::Instant) -> Result<Value, ApiError> {
     let mut parts = vec![];
     if let Some(t) = text {
@@ -69,7 +67,7 @@ pub async fn send_and_wait(http: &reqwest::Client, url: &str, auth: Option<(&str
     while r.get("status").is_some() {
         let state = r["status"]["state"].as_str().unwrap_or_default();
         match state {
-            "TASK_STATE_COMPLETED" => return Ok(r["status"]["message"].clone().as_object().map_or_else(|| last_artifact(&r), |_| r["status"]["message"].clone())),
+            "TASK_STATE_COMPLETED" => return Ok(if r["status"]["message"].is_object() { r["status"]["message"].clone() } else { last_artifact(&r) }),
             "TASK_STATE_FAILED" | "TASK_STATE_CANCELED" | "TASK_STATE_REJECTED" => {
                 return Err(ApiError::new(ErrorCode::ProviderUnavailable, format!("a2a task {}: {}", r["id"], text_of(&r["status"]["message"]))));
             }

@@ -1,10 +1,4 @@
 //! Node API (PRD §23).
-//!
-//!   POST /v1/nodes/join              {name, joinToken, capacity, labels} -> {credential}   (no bearer)
-//!   POST /v1/nodes/{name}/heartbeat  (node credential) -> {assignments: [...]}
-//!   POST /v1/nodes/{name}/renew      (node credential) {csr} -> {certificate}: rotates the node cert
-//!   GET  /v1/nodes                   (owner) nodes with readiness and their instances
-//!   POST /v1/nodes/{name}/cordon|uncordon|drain   (owner) maintenance
 
 use axum::extract::{Extension, Path, State};
 use axum::routing::{get, post};
@@ -91,7 +85,6 @@ async fn heartbeat(State(s): State<AppState>, Extension(ctx): Extension<RequestC
                 "hibernate": i.hibernate, "checkpoint": i.checkpoint.map(|j| j.0), "checkpointVersion": i.checkpoint_version })
         })
         .collect();
-    // exec sessions waiting for this node (clank exec)
     Ok(Json(json!({ "assignments": assignments, "exec": crate::exec::pending_for(&s, &name).await? })))
 }
 
@@ -122,8 +115,7 @@ struct RenewBody {
     csr: String,
 }
 
-/// Certificate rotation: authenticated by the node's current certificate, signs a CSR for a fresh
-/// key. The new fingerprint becomes current; the previous one is honoured for 5 minutes.
+/// Certificate rotation: authenticated by the node's current certificate, signs a CSR for a fresh key.
 async fn renew(State(s): State<AppState>, Extension(ctx): Extension<RequestCtx>, Path(name): Path<String>, Json(b): Json<RenewBody>) -> ApiResult<Json<Value>> {
     if node_of(&ctx) != Some(name.as_str()) {
         return Err(ApiError::new(ErrorCode::Forbidden, "a node can only renew its own certificate").into());

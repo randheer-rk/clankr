@@ -79,7 +79,7 @@ fn mock_embed(inputs: &[String]) -> Embedded {
 
 fn replay(conn: &ProviderConnectionSpec, req: &GenerateRequest) -> Result<Reply, ApiError> {
     let hash = crate::prompt_sha256(req);
-    let text: String = req.system.iter().chain(req.messages.iter().map(|m| &m.content)).cloned().collect::<Vec<_>>().join("\n");
+    let text: String = req.system.iter().chain(req.messages.iter().map(|m| &m.content)).map(String::as_str).collect::<Vec<_>>().join("\n");
     let e = conn
         .script
         .iter()
@@ -154,8 +154,7 @@ async fn openai_embed(http: &reqwest::Client, url: &str, auth: (&str, &str), mod
     Ok(Embedded { vectors, input_tokens: r["usage"]["prompt_tokens"].as_i64().unwrap_or_else(|| inputs.iter().map(|s| tokens(s)).sum()) })
 }
 
-/// Anthropic Messages API: `POST /v1/messages`, `x-api-key` + `anthropic-version` headers.
-/// System text goes in the top-level `system` field, not in `messages`.
+/// Anthropic Messages API: system text goes in the top-level `system` field, not in `messages`.
 async fn anthropic(http: &reqwest::Client, conn: &ProviderConnectionSpec, model: &str, key: &str, req: &GenerateRequest, max_out: u32) -> Result<Reply, ApiError> {
     let mut system: Vec<&str> = req.system.iter().map(String::as_str).collect();
     system.extend(req.messages.iter().filter(|m| m.role == "system").map(|m| m.content.as_str()));
@@ -175,8 +174,7 @@ async fn anthropic(http: &reqwest::Client, conn: &ProviderConnectionSpec, model:
     })
 }
 
-/// Gemini's `generateContent`, shared by the Gemini API (key) and Vertex (OAuth): roles are
-/// `user`/`model`, system text is `systemInstruction`.
+/// Gemini's `generateContent`, shared by the Gemini API (key) and Vertex (OAuth): roles are `user`/`model`, system text is `systemInstruction`.
 async fn gemini(http: &reqwest::Client, url: &str, auth: (&str, &str), req: &GenerateRequest, max_out: u32) -> Result<Reply, ApiError> {
     let mut system: Vec<&str> = req.system.iter().map(String::as_str).collect();
     system.extend(req.messages.iter().filter(|m| m.role == "system").map(|m| m.content.as_str()));

@@ -1,6 +1,4 @@
-//! AWS Signature Version 4, the small part of it that signing one JSON request needs (Bedrock,
-//! S3). Written out rather than pulled in: it's forty lines of HMACs and the test suite's own
-//! vector proves them.
+//! AWS Signature Version 4, just enough to sign one JSON request (Bedrock, S3); written out rather than pulled in, and checked against the AWS test suite's vector.
 
 use hmac::{KeyInit, Mac};
 use sha2::{Digest, Sha256};
@@ -24,7 +22,6 @@ impl Credentials {
         Some(Self { key_id, secret, session: it.next().map(str::to_owned).filter(|s| !s.is_empty()) })
     }
 
-    /// From the usual environment variables.
     pub fn from_env() -> Option<Self> {
         let key_id = std::env::var("AWS_ACCESS_KEY_ID").ok()?;
         let secret = std::env::var("AWS_SECRET_ACCESS_KEY").ok()?;
@@ -109,10 +106,7 @@ mod tests {
         let req = Request { method: "GET", host: "example.amazonaws.com", path: "/", query: "", headers: vec![], body: b"" };
         let h = sign(&req, &creds, "us-east-1", "service", "20150830T123600Z");
         let auth = &h.iter().find(|(k, _)| k == "authorization").unwrap().1;
-        // the suite's expected value doesn't sign x-amz-content-sha256; recompute without it
-        let req = Request { method: "GET", host: "example.amazonaws.com", path: "/", query: "", headers: vec![], body: b"" };
-        let mut without = sign_without_content_sha(&req, &creds, "us-east-1", "service", "20150830T123600Z");
-        without.truncate(without.len());
+        let without = sign_without_content_sha(&req, &creds, "us-east-1", "service", "20150830T123600Z");
         assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date"));
         assert_eq!(without, "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31");
         assert!(Credentials::parse("x").is_none());

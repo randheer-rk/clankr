@@ -90,7 +90,6 @@ pub async fn serve(base: String, tls: NodeTls, node: String, kennel: PathBuf, ke
     };
     tracing::info!(session = %x.session, instance = %x.instance, tty = x.request.tty, "exec session started");
 
-    // output (and finally the status) up to clankrd
     let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(64);
     let reader = {
         let tx = tx.clone();
@@ -107,7 +106,6 @@ pub async fn serve(base: String, tls: NodeTls, node: String, kennel: PathBuf, ke
     let body = reqwest::Body::wrap_stream(futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|b| (Ok::<_, std::io::Error>(b), rx)) }));
     let upload = tokio::spawn(http.post(url("output")).body(body).send());
 
-    // the user's input down to the process
     let (in_tx, in_rx) = std::sync::mpsc::channel::<Option<Vec<u8>>>();
     let writer = std::thread::spawn(move || {
         while let Ok(m) = in_rx.recv() {

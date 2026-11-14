@@ -1,9 +1,5 @@
 //! Multi-cluster placement (ADR 0025): explicit cross-cluster routing of workflow runs.
 //!
-//!   POST /v1/namespaces/{ns}/workflows/{wf}/runs   {input, cluster}  -> the remote run (+ cluster)
-//!   GET  /v1/namespaces/{ns}/remoteruns             runs started elsewhere from here
-//!   GET  /v1/namespaces/{ns}/remoteruns/{id}        live status, fetched from the remote cluster
-//!
 //! A start is refused unless all of these hold:
 //! - the namespace's PlacementPolicies allow the cluster's region;
 //! - the remote cluster already holds the identical Workflow (same spec digest);

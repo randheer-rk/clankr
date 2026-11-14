@@ -44,7 +44,6 @@ impl AuditEvent {
     }
 }
 
-/// What an audited action touched.
 pub struct AuditTarget<'a> {
     pub kind: &'a str,
     pub namespace: &'a str,

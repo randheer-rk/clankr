@@ -17,7 +17,6 @@ use crate::graph::{JoinMode, NodeId, NodeKind, WorkflowSpec, lookup, parse_durat
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum Event {
-    // inputs
     RunStarted { input: Value },
     TaskCompleted { task: String, result: Value },
     TaskFailed { task: String, error: String, retryable: bool },
@@ -28,7 +27,6 @@ pub enum Event {
     RunCancelled { reason: String },
     /// First event after the history copied into a fork: `patch` is merged into the data.
     RunForked { from: uuid::Uuid, at: i64, patch: Map<String, Value> },
-    // consequences
     NodeEntered { node: NodeId },
     JoinArrived { node: NodeId },
     JoinFired { node: NodeId, swallow: u32 },
@@ -248,12 +246,12 @@ pub fn decide(g: &WorkflowSpec, state: &RunState, input: Event, now: DateTime<Ut
             d.enter(&g.entrypoint);
         }
         Event::TaskCompleted { task, .. } => {
-            let t = state.tasks.get(task).ok_or_else(|| Reject::UnknownTask(task.clone()))?.clone();
+            let t = state.tasks.get(task).ok_or_else(|| Reject::UnknownTask(task.clone()))?;
             d.emit(input.clone());
             d.advance(&t.node);
         }
         Event::TaskFailed { task, error, retryable } => {
-            let t = state.tasks.get(task).ok_or_else(|| Reject::UnknownTask(task.clone()))?.clone();
+            let t = state.tasks.get(task).ok_or_else(|| Reject::UnknownTask(task.clone()))?;
             d.emit(input.clone());
             let policy = g.nodes[&t.node].retry_policy.as_ref().unwrap_or(&g.retry_policy);
             if *retryable && t.attempt < policy.max_attempts {
@@ -265,31 +263,31 @@ pub fn decide(g: &WorkflowSpec, state: &RunState, input: Event, now: DateTime<Ut
             }
         }
         Event::TimerFired { timer } => {
-            let node = state.timers.get(timer).ok_or_else(|| Reject::UnknownTimer(timer.clone()))?.clone();
+            let node = state.timers.get(timer).ok_or_else(|| Reject::UnknownTimer(timer.clone()))?;
             d.emit(input.clone());
-            d.advance(&node);
+            d.advance(node);
         }
         Event::TaskOutcomeUnknown { task } => {
             state.tasks.get(task).ok_or_else(|| Reject::UnknownTask(task.clone()))?;
             d.emit(input.clone());
         }
         Event::SignalReceived { signal, payload } => {
-            let node = state.waits.get(signal).ok_or_else(|| Reject::NotWaiting(signal.clone()))?.clone();
-            let unknown = signal.strip_prefix("resolve.").and_then(|t| state.unknown.get(t)).cloned();
+            let node = state.waits.get(signal).ok_or_else(|| Reject::NotWaiting(signal.clone()))?;
+            let unknown = signal.strip_prefix("resolve.").and_then(|t| state.unknown.get(t));
             d.emit(input.clone());
             if let Some(t) = unknown {
                 match payload["outcome"].as_str() {
-                    Some("completed") => d.advance(&node),
-                    Some("retry") => d.schedule_task(&node, t.attempt + 1, now),
+                    Some("completed") => d.advance(node),
+                    Some("retry") => d.schedule_task(node, t.attempt + 1, now),
                     _ => d.fail(format!("node {node}: outcome unknown, resolved as failed: {}", payload["error"].as_str().unwrap_or("no reason given"))),
                 }
             } else {
-                match &g.nodes[&node].kind {
+                match &g.nodes[node].kind {
                     NodeKind::Approval { on_reject, .. } if payload.get("approved") != Some(&Value::Bool(true)) => match on_reject {
                         Some(r) => d.enter(r),
                         None => d.fail(format!("approval {node} rejected")),
                     },
-                    _ => d.advance(&node),
+                    _ => d.advance(node),
                 }
             }
         }
@@ -326,8 +324,8 @@ impl Decider<'_> {
     }
 
     fn advance(&mut self, node: &NodeId) {
-        for n in self.g.nodes[node].next.clone() {
-            self.enter(&n);
+        for n in &self.g.nodes[node].next {
+            self.enter(n);
         }
     }
 

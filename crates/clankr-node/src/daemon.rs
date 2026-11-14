@@ -62,9 +62,7 @@ pub async fn read_frame(r: &mut OwnedReadHalf) -> Result<AgentFrame> {
     serde_json::from_slice(&buf).context("malformed frame")
 }
 
-/// Runs one agent instance until `shutdown` flips, restarting the agent process when it dies,
-/// with capped backoff, until the Agent's restart budget is spent: then it returns the
-/// crash-loop error, which the fleet reports.
+/// Runs one agent instance until `shutdown` flips, restarting the agent with capped backoff until its restart budget is spent; then returns the crash-loop error, which the fleet reports.
 pub async fn run_instance(client: Client, cfg: Config, mut shutdown: watch::Receiver<bool>) -> Result<()> {
     let mut backoff = Duration::from_secs(1);
     let mut failures: std::collections::VecDeque<std::time::Instant> = Default::default();
@@ -104,9 +102,7 @@ pub async fn run_instance(client: Client, cfg: Config, mut shutdown: watch::Rece
     Ok(())
 }
 
-/// Socket paths are capped at ~108 bytes (sun_path), so sockets live under the short per-user
-/// runtime dir (`$XDG_RUNTIME_DIR`, else the work dir), in a subdirectory keyed by the work dir
-/// so separate nodes on one host never collide.
+/// Socket paths are capped at ~108 bytes (sun_path), so sockets live under the short `$XDG_RUNTIME_DIR` (else the work dir), keyed by the work dir so separate nodes on one host never collide.
 fn socket_dir(cfg: &Config) -> Result<PathBuf> {
     use sha2::Digest;
     let key = hex::encode(&sha2::Sha256::digest(cfg.work_dir.to_string_lossy().as_bytes())[..4]);
@@ -143,7 +139,7 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
         .collect::<std::io::Result<_>>()?;
     let listener = UnixListener::bind(&sock)?;
     std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o666))?;
-    // direct network, re-checked here like ImagePolicy: the node is the last line before code runs
+    // direct network, re-checked here like ImagePolicy
     let direct_cidrs = match spec.network {
         clankr_types::agent::NetworkMode::Direct => Some(clankr_types::agent::direct_network_allowed(&client.network_policies().await?).map_err(|e| anyhow::anyhow!("refusing to launch: {e}"))?),
         clankr_types::agent::NetworkMode::Proxy => None,
@@ -151,8 +147,7 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
     if direct_cidrs.is_some() {
         tracing::info!(instance = %cfg.instance, "launching with direct network (NetworkPolicy allows it)");
     }
-    // egress proxy for the listed hosts (containers only: the process runtime is on the host
-    // network; a direct-network agent doesn't need one)
+    // egress proxy, containers only (the process runtime is on the host network); a direct-network agent doesn't need one
     let egress = match (&spec.runtime, spec.egress.is_empty() || direct_cidrs.is_some()) {
         (Runtime::Oci { .. }, false) => {
             let rules = spec.egress.iter().map(|e| clankr_types::agent::EgressRule::parse(e).map_err(|m| anyhow::anyhow!(m))).collect::<Result<_>>()?;
@@ -162,8 +157,7 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
         }
         _ => None,
     };
-    // direct network: kennel logs each new connection with the filter's verdict; logged here
-    // like the proxy's connections
+    // direct network: kennel logs each new connection with the filter's verdict; logged here like the proxy's connections
     let nat_log = dir.join("nat.log");
     let _nat_tail = match direct_cidrs {
         Some(_) => {
@@ -209,8 +203,7 @@ async fn run_once(client: &Client, cfg: &Config, spec: &AgentSpec, shutdown: &mu
             }
             let r = &spec.resources;
             let vm = *class == clankr_types::agent::SandboxClass::Microvm;
-            // containers bind-mount the socket dir; a microVM gets each socket over vsock, in
-            // its writable /tmp
+            // containers bind-mount the socket dir; a microVM gets each socket over vsock, in its writable /tmp
             let sock_dir = if vm { VM_SOCKET_DIR } else { CONTAINER_SOCKET_DIR };
             c.args(["run", "--runtime", class.kennel_arg(), "--network", if direct_cidrs.is_some() { "nat" } else { "none" }, "--name", &cfg.instance])
                 .args(["--memory", &r.memory_mib.to_string(), "--cpus", &r.cpus.to_string(), "--pids", &r.pids.to_string()])
@@ -569,14 +562,12 @@ async fn broker(client: &Client, spec: &AgentSpec, who: &str, task: Option<&Leas
             client.mailbox(&mailbox, "receive", &body, who).await
         }
         CallOp::MailboxAck { mailbox, id, epoch } => {
-            // a service's own queue: clankrd checks this agent serves it
             if !mailbox.starts_with("svc:") && !spec.mailboxes.contains(&mailbox) {
                 return Err(deny("AgentMailbox", &mailbox));
             }
             client.mailbox(&mailbox, "ack", &json!({"id": id, "epoch": epoch}), who).await
         }
         CallOp::MailboxNack { mailbox, id, epoch, delay_seconds, reason } => {
-            // a service's own queue: clankrd checks this agent serves it
             if !mailbox.starts_with("svc:") && !spec.mailboxes.contains(&mailbox) {
                 return Err(deny("AgentMailbox", &mailbox));
             }

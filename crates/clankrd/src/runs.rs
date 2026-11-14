@@ -1,18 +1,4 @@
 //! Workflow execution and worker task API (PRD §35).
-//!
-//!   POST /v1/namespaces/{ns}/workflows/{name}/runs     start  {input, idempotencyKey?} (or Idempotency-Key header)
-//!   GET  /v1/namespaces/{ns}/workflows/{name}/runs     list runs of one workflow
-//!   GET  /v1/namespaces/{ns}/runs                      list runs
-//!   GET  /v1/namespaces/{ns}/runs/{id}
-//!   GET  /v1/namespaces/{ns}/runs/{id}/history
-//!   POST /v1/namespaces/{ns}/runs/{id}/signal          {signal, payload}
-//!   POST /v1/namespaces/{ns}/runs/{id}/cancel          {reason}
-//!   GET  /v1/namespaces/{ns}/runs/{id}/state?at=N      the run as of event N (time travel)
-//!   POST /v1/namespaces/{ns}/runs/{id}/fork            {at, patch?} -> 201 new run from event N
-//!   POST /v1/namespaces/{ns}/tasks/lease               {queue, owner, ttlSeconds?, waitSeconds?} -> 200 task | 204
-//!   POST /v1/namespaces/{ns}/tasks/heartbeat           {runId, task, epoch, ttlSeconds?}
-//!   POST /v1/namespaces/{ns}/tasks/complete            {runId, task, epoch, result}
-//!   POST /v1/namespaces/{ns}/tasks/fail                {runId, task, epoch, error, retryable}
 
 use std::time::Duration;
 
@@ -154,8 +140,7 @@ async fn tool_calls(State(s): State<AppState>, Path((ns, id)): Path<(String, Str
     Ok(Json(rows))
 }
 
-/// Recorded model calls for a run (connections with `record: true`), oldest first: the raw
-/// material for a replay script.
+/// Recorded model calls for a run (connections with `record: true`), oldest first.
 async fn traces(State(s): State<AppState>, Path((ns, id)): Path<(String, String)>) -> ApiResult<Json<Value>> {
     let rows: Value = sqlx::query_scalar(
         "select coalesce(jsonb_agg(jsonb_build_object(

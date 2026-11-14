@@ -293,8 +293,7 @@ pub fn validate(schema: &Value, v: &Value, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Strips terminal control sequences from every string (keeps \n and \t) so tool output can't
-/// drive an operator's terminal or the UI (CL-28-08).
+/// Strips control characters from every string (keeps \n and \t) so tool output can't drive an operator's terminal or the UI (CL-28-08).
 pub fn sanitize(v: Value) -> Value {
     match v {
         Value::String(s) => Value::String(s.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()),
@@ -315,7 +314,7 @@ fn bound(v: Value, max: usize) -> (Value, bool) {
     if text.len() <= max {
         return (v, false);
     }
-    let cut = (0..=max.min(text.len())).rev().find(|i| text.is_char_boundary(*i)).unwrap_or(0);
+    let cut = (0..=max).rev().find(|i| text.is_char_boundary(*i)).unwrap_or(0);
     (json!({"truncated": true, "bytes": text.len(), "preview": &text[..cut]}), true)
 }
 
@@ -330,9 +329,8 @@ impl Gateway {
         }
     }
 
-    /// Like `call_tool`, but with `Placement::Caller` a container tool (`sandbox`, `mcpStdio`)
-    /// isn't run here: every check passes and the key is claimed, then the work goes back to the
-    /// caller (a node), which runs it and reports through `complete_delegated`.
+    /// Like `call_tool`, but with `Placement::Caller` a container tool (`sandbox`, `mcpStdio`) is checked and its key claimed here,
+    /// then handed back to the caller (a node), which runs it and reports through `complete_delegated`.
     pub async fn call_tool_at(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, call: ToolCall, at: Placement) -> Result<Outcome, ApiError> {
         let claim = admit_tool_claim(&self.store.get(ns, "ToolClaim", claim_name).await?.spec)?;
         let forbid = |m: String| ApiError::new(ErrorCode::Forbidden, m);
@@ -428,8 +426,7 @@ impl Gateway {
         self.finish(ctx, ns, id, &call.tool, &call.method, &tool, method.side_effects, needs_approval || method.side_effects == Effects::Unsafe, approval, outcome, ms).await.map(Outcome::Done)
     }
 
-    /// The caller's node reporting a delegated call (`output` or an error message), measured
-    /// on the node. Only the node that took the call may report it, once, within its timeout.
+    /// A node's report of a delegated call, timed on the node; only the node that took the call may report it, once, within its timeout.
     pub async fn complete_delegated(&self, ctx: &RequestCtx, ns: &str, call_id: i64, result: Result<Value, String>, duration_ms: i64) -> Result<ToolResult, ApiError> {
         type Row = (String, String, Option<Uuid>, String, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<i32>);
         let row: Option<Row> = sqlx::query_as(
@@ -456,8 +453,7 @@ impl Gateway {
         self.finish(ctx, ns, call_id, &tool_name, &method_name, &tool, effects, approval.is_some() || effects == Effects::Unsafe, approval, outcome, duration_ms).await
     }
 
-    /// Settles delegated calls whose node never reported (gone, partitioned): unsafe ones become
-    /// OutcomeUnknown, the rest are freed for a retry. Returns how many.
+    /// Settles delegated calls whose node never reported: unsafe ones become OutcomeUnknown, the rest are freed for a retry. Returns how many.
     pub async fn expire_delegated(&self) -> Result<u64, ApiError> {
         let r = sqlx::query(
             "with stale as (select id, unsafe_effects from tool_calls where state = 'started' and delegated_at is not null
@@ -518,8 +514,7 @@ impl Gateway {
         Ok(ToolResult { output, output_sha256: output_sha.unwrap_or_default(), truncated, duration_ms: ms, tool_version: tool.version.clone(), replayed: false, approval })
     }
 
-    /// The approval a high-risk call spends: the named one, or the run's newest granted one
-    /// not yet used by another call. Approvals belong to runs, so calls outside a run can't spend one.
+    /// The named approval, or the run's newest unused granted one; approvals belong to runs, so calls outside a run can't spend one.
     async fn approval_for(&self, ns: &str, call: &ToolCall) -> Result<Uuid, ApiError> {
         let need = || ApiError::new(ErrorCode::Forbidden, format!("{}.{} needs an approval from an editor in this run first", call.tool, call.method));
         let run = call.run_id.ok_or_else(need)?;

@@ -166,8 +166,7 @@ pub async fn read_s3(http: &reqwest::Client, dest: &str) -> Result<String> {
     Ok(out)
 }
 
-/// The text of every `<tag>…</tag>` in a small XML document (S3 listings carry no attributes
-/// or nesting on these elements).
+/// The text of every `<tag>…</tag>` (S3 listings carry no attributes or nesting on these elements).
 fn tags(xml: &str, tag: &str) -> Vec<String> {
     let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
     xml.split(&open).skip(1).filter_map(|rest| rest.split(&close).next()).map(|s| s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")).collect()
@@ -219,9 +218,7 @@ impl Check {
     }
 }
 
-/// Compares an exported JSONL copy (from `file://`, or collected from a receiver) with the
-/// database: the copy must be an unbroken chain, and every row in it must still be in the
-/// database, unchanged.
+/// Compares an exported JSONL copy with the database: the copy must be an unbroken chain, and every row in it still in the database, unchanged.
 pub async fn audit_check(store: &Store, export: &str) -> Result<Check> {
     let mut rows: Vec<AuditEvent> = export.lines().filter(|l| !l.trim().is_empty()).map(serde_json::from_str).collect::<Result<_, _>>().context("parse export")?;
     rows.sort_by_key(|r| r.seq);

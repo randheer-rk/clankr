@@ -5,13 +5,6 @@
 //! LISTENs on the session's channel and each sending leg NOTIFYs it. Both sides speak kennel's
 //! exec frames, `[kind, len u32 BE, bytes]`, which clankrd passes through.
 //!
-//!   POST /v1/namespaces/{ns}/instances/{id}/exec  {command, tty, rows, cols} -> {session}
-//!   GET  /v1/namespaces/{ns}/exec/{session}/output   frames from the process (ends at exit)
-//!   POST /v1/namespaces/{ns}/exec/{session}/input    frames to it (streamed request body)
-//!   GET  /v1/nodes/{name}/exec/{session}/input       (node) the user's input
-//!   POST /v1/nodes/{name}/exec/{session}/output      (node) the process's output
-//!   GET  /v1/namespaces/{ns}/instances               instances, to find one to exec into
-//!
 //! Order, so nothing is sent before its listener exists: the user's output listener subscribes,
 //! then the session is offered to the node; the node's input listener subscribes, then the
 //! session is claimed and the user's input may flow.
@@ -25,6 +18,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
+use clankr_store::db;
 use clankr_types::{ApiError, ErrorCode, RequestCtx};
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -47,10 +41,6 @@ struct Session {
     age: Duration,
 }
 
-fn db(e: sqlx::Error) -> ApiError {
-    clankr_store::db(e)
-}
-
 fn channel(id: Uuid, dir: &str) -> String {
     format!("exec_{}_{dir}", id.simple())
 }
@@ -65,8 +55,7 @@ async fn remove(s: &AppState, id: Uuid) {
     let _ = sqlx::query("delete from exec_sessions where id = $1").bind(id).execute(s.store.pool()).await;
 }
 
-/// Sessions offered to `node`, for its heartbeat (and housekeeping: unclaimed ones past the
-/// timeout, and any left behind by a vanished user, are dropped).
+/// Sessions offered to `node`, for its heartbeat; also drops unclaimed ones past the timeout and any left behind by a vanished user.
 pub async fn pending_for(s: &AppState, node: &str) -> Result<Vec<Value>, ApiError> {
     sqlx::query("delete from exec_sessions where (not claimed and created_at < now() - make_interval(secs => $1)) or created_at < now() - interval '1 day'")
         .bind(CLAIM_TIMEOUT.as_secs_f64())

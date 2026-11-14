@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{ApiError, ErrorCode};
+use crate::{ApiError, invalid};
 
 /// How deliveries are signed. Every scheme is an HMAC-SHA256 of the body with the shared
 /// secret; they differ in where the signature travels and what exactly is signed.
@@ -55,10 +55,6 @@ fn default_header() -> String {
 
 fn default_max_body() -> usize {
     256 * 1024
-}
-
-fn invalid(field: &str, m: impl Into<String>) -> ApiError {
-    ApiError::new(ErrorCode::InvalidSpec, m).field(field)
 }
 
 pub fn admit_webhook(spec: &Value) -> Result<WebhookSpec, ApiError> {

@@ -82,17 +82,13 @@ fn hmac_hex(secret: &str, msg: &[u8]) -> String {
     hex::encode(m.finalize().into_bytes())
 }
 
-fn ct_eq(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
 /// Checks the delivery's signature. Errors are what the sender did wrong, never the secret.
 pub fn verify(spec: &WebhookSpec, secret: &str, headers: &HeaderMap, body: &[u8], now: i64) -> Result<(), String> {
     let header = |h: &str| headers.get(h).and_then(|v| v.to_str().ok()).ok_or_else(|| format!("missing {h} header"));
     match spec.signature {
         Signature::Github => {
             let sig = header("x-hub-signature-256")?.strip_prefix("sha256=").ok_or("X-Hub-Signature-256 isn't sha256=…")?;
-            if !ct_eq(&sig.to_ascii_lowercase(), &hmac_hex(secret, body)) {
+            if !crate::ct_eq(sig.to_ascii_lowercase().as_bytes(), hmac_hex(secret, body).as_bytes()) {
                 return Err("bad signature".into());
             }
         }
@@ -106,14 +102,14 @@ pub fn verify(spec: &WebhookSpec, secret: &str, headers: &HeaderMap, body: &[u8]
             let mut signed = format!("{t}.").into_bytes();
             signed.extend_from_slice(body);
             let want = hmac_hex(secret, &signed);
-            if !h.split(',').filter_map(|p| p.trim().strip_prefix("v1=")).any(|v| ct_eq(&v.to_ascii_lowercase(), &want)) {
+            if !h.split(',').filter_map(|p| p.trim().strip_prefix("v1=")).any(|v| crate::ct_eq(v.to_ascii_lowercase().as_bytes(), want.as_bytes())) {
                 return Err("bad signature".into());
             }
         }
         Signature::Generic => {
             let v = header(&spec.header.to_ascii_lowercase())?;
             let sig = v.strip_prefix(spec.prefix.as_str()).ok_or_else(|| format!("{} doesn't start with {:?}", spec.header, spec.prefix))?;
-            if !ct_eq(&sig.to_ascii_lowercase(), &hmac_hex(secret, body)) {
+            if !crate::ct_eq(sig.to_ascii_lowercase().as_bytes(), hmac_hex(secret, body).as_bytes()) {
                 return Err("bad signature".into());
             }
         }

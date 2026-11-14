@@ -40,8 +40,7 @@ pub struct Candidate {
     pub used_cpus: f64,
 }
 
-/// Hard filters, then the node with the most free memory (spreads load). Deterministic: ties
-/// break by name. Err explains why nothing fits (CL-23-03/04).
+/// Hard filters, then the node with the most free memory (spreads load); ties break by name. Err explains why nothing fits (CL-23-03/04).
 pub fn place(req: &Requirements, nodes: &[Candidate]) -> Result<String, String> {
     let mut why = BTreeMap::<&str, usize>::new();
     let mut best: Option<(&Candidate, f64)> = None;
@@ -279,8 +278,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
                         unavailable += 1;
                     }
                     budget -= 1;
-                    // the Agent changed (new image, env, limits): restart in place on the new spec;
-                    // the epoch bump fences the old process like any move
+                    // the Agent changed: restart in place on the new spec; the epoch bump fences the old process like any move
                     sqlx::query("update instances set epoch = epoch + 1, agent_generation = $2, memory_mib = $3, cpus = $4, agent_spec = $5, updated_at = now() where id = $1")
                         .bind(&i.id)
                         .bind(generation)
@@ -397,8 +395,7 @@ pub async fn reconcile(store: &Store, lead: &Leadership) -> Result<Report, ApiEr
     Ok(report)
 }
 
-/// Placement with volume rules: a ReadWriteOnce claim attached elsewhere blocks; a bound claim
-/// pins the instance to its node (local data never moves).
+/// Placement with volume rules: a ReadWriteOnce claim attached elsewhere blocks; a bound claim pins the instance to its node.
 fn try_place(
     req: &Requirements,
     ns: &str,
@@ -472,10 +469,8 @@ async fn delete(tx: &mut clankr_store::Tx, id: &str) -> Result<(), ApiError> {
     sqlx::query("delete from instances where id = $1").bind(id).execute(&mut **tx).await.map_err(clankr_store::db).map(drop)
 }
 
-/// Best effort: status is informational, the instances table is the truth.
 /// One autoscaling step: the replica count to run now and when demand first dipped below it.
-/// Up: immediately to what the queue needs. Down: only once demand has stayed lower for the
-/// delay, then straight to what it needs (no flapping on bursty queues).
+/// Up immediately; down only once demand has stayed lower for the delay (no flapping on bursty queues).
 pub fn autoscale_step(
     a: &clankr_types::agent::Autoscale,
     depth: i64,
@@ -507,6 +502,7 @@ struct Rollup {
     crash_looping: Vec<(String, String)>,
 }
 
+/// Best effort: status is informational, the instances table is the truth.
 async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usize, pending: usize, reason: &str, rollup: Option<Rollup>) {
     let mut status = serde_json::json!({ "scheduled": scheduled, "pending": pending, "phase": if pending == 0 { "Ready" } else { "Pending" } });
     if pending > 0 && !reason.is_empty() {
@@ -546,9 +542,8 @@ async fn set_status(store: &Store, res: &clankr_types::Resource, scheduled: usiz
 /// How long an instance may take to checkpoint before it's released without one.
 const HIBERNATE_TIMEOUT_SECS: i64 = 90;
 
-/// One pass of hibernating a deployment: asks each instance to checkpoint, releases the ones
-/// that did (or can't: node gone, timed out — recorded as no checkpoint). Returns (instances
-/// still up, status.hibernation).
+/// One hibernation pass: asks each instance to checkpoint, releases the ones that did (or can't: node gone, timed out).
+/// Returns (instances still up, status.hibernation).
 async fn hibernate(
     tx: &mut clankr_store::Tx,
     ns: &str,
@@ -764,7 +759,7 @@ pub fn spawn(store: Store, holder: String, every: Duration) -> tokio::task::Join
                 }
             };
             match reconcile(&store, &lead).await {
-                Ok(r) if r != Report::default() && (r.created + r.moved + r.removed + r.restarted) > 0 => tracing::info!(?r, epoch = lead.epoch, "scheduled"),
+                Ok(r) if (r.created + r.moved + r.removed + r.restarted) > 0 => tracing::info!(?r, epoch = lead.epoch, "scheduled"),
                 Ok(_) => {}
                 Err(e) if e.code == ErrorCode::StaleLease => tracing::warn!(error = %e, "lost leadership mid-pass"),
                 Err(e) => tracing::warn!(error = %e, "reconcile failed"),

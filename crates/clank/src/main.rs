@@ -1,5 +1,3 @@
-//! `clank` — Clankr CLI.
-
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 
@@ -445,7 +443,7 @@ fn run(cli: Cli) -> Result<()> {
     // no overall timeout: watches stream indefinitely
     let mut builder = Client::builder().timeout(None);
     if cli.server.starts_with("https://") {
-        let path = cli.ca.clone().unwrap_or_else(|| {
+        let path = cli.ca.unwrap_or_else(|| {
             let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").expect("HOME set")).join(".local/share"));
             data.join("clankr/pki/ca.crt")
         });
@@ -494,7 +492,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Nodes => {
             let v: Value = ok(api.req(reqwest::Method::GET, "/v1/nodes").send()?)?.json()?;
-            let inst = v["instances"].as_array().cloned().unwrap_or_default();
+            let inst = v["instances"].as_array().map(Vec::as_slice).unwrap_or_default();
             let rows: Vec<Vec<String>> = v["nodes"]
                 .as_array()
                 .into_iter()
@@ -524,7 +522,7 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 print_table(&["NAME", "STATUS", "MEMORY", "CPUS", "RUNTIMES", "INSTANCES"].map(String::from), &rows);
             }
-            for i in &inst {
+            for i in inst {
                 if let Some(note) = i["note"].as_str() {
                     let at = i["node"].as_str().unwrap_or("unplaced");
                     println!("{} ({at}): {note}", i["id"].as_str().unwrap_or("?"));
@@ -714,7 +712,6 @@ fn print_table(header: &[String], rows: &[Vec<String>]) {
     }
 }
 
-/// Reads the SSE watch stream and prints one line (or document) per event.
 fn watch_print(resp: Response, output: Output, show_ns: bool) -> Result<()> {
     let (mut event, mut data) = (String::new(), String::new());
     if output == Output::Table {
@@ -787,8 +784,8 @@ fn run_cmd(api: &Api, ns: &str, cmd: RunCmd) -> Result<()> {
             if let Some(k) = idempotency_key {
                 body["idempotencyKey"] = k.into();
             }
-            if let Some(c) = &cluster {
-                body["cluster"] = c.clone().into();
+            if let Some(c) = cluster {
+                body["cluster"] = c.into();
             }
             let r: Value = ok(api.req(M::POST, &format!("/v1/namespaces/{ns}/workflows/{workflow}/runs")).json(&body).send()?)?.json()?;
             run_summary(&r);
@@ -1143,13 +1140,12 @@ fn secret_cmd(api: &Api, ns: &str, cmd: SecretCmd) -> Result<()> {
     Ok(())
 }
 
-/// `clank exec`: start a session, stream stdin up as frames, print output frames, exit with the
-/// process's status (see clankrd/src/exec.rs).
+/// Streams stdin up and output down as frames, exits with the process's status (see clankrd/src/exec.rs).
 fn exec(api: &Api, ns: &str, target: &str, tty: bool, command: Vec<String>) -> Result<()> {
     use reqwest::Method as M;
-    use std::io::{IsTerminal, Read, Write};
+    use std::io::{IsTerminal, Write};
     let list: Value = ok(api.req(M::GET, &format!("/v1/namespaces/{ns}/instances")).send()?)?.json()?;
-    let items = list["items"].as_array().cloned().unwrap_or_default();
+    let items = list["items"].as_array().map(Vec::as_slice).unwrap_or_default();
     let id = items
         .iter()
         .find(|i| i["id"] == target)

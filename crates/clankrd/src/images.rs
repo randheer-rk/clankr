@@ -1,8 +1,4 @@
-//! Image promotion by digest (BLD-17, CL-24-07):
-//!
-//!   POST /v1/namespaces/{ns}/agentimages/{name}/promotions   {stage, digest, reason?, evidence?}
-//!   POST /v1/namespaces/{ns}/agentimages/{name}/rollback     {stage, reason?}
-//!   GET  /v1/namespaces/{ns}/agentimages/{name}/promotions   (?stage=)  newest first
+//! Image promotion by digest (BLD-17, CL-24-07).
 //!
 //! A digest enters stage N only if it was promoted to stage N-1 first; a stage may require an
 //! evaluation report with a minimum pass rate. Every Agent tracking the stage gets its
@@ -56,9 +52,8 @@ pub(crate) async fn policies(store: &Store, ns: &str) -> Result<Vec<(String, cla
         .collect()
 }
 
-/// Agents must satisfy the namespace's ImagePolicies (repositories, runtime); signatures are
-/// checked by the node at launch, where the registry is reachable. Agents that track a stage
-/// must run exactly what that stage holds (no hand-edited drift).
+/// Agents must satisfy the namespace's ImagePolicies; signatures are checked by the node at launch, where the registry is reachable.
+/// Agents that track a stage must run exactly what that stage holds (no hand-edited drift).
 pub(crate) async fn admit_tracking(store: &Store, r: &Resource) -> Result<(), ApiError> {
     if r.kind != "Agent" {
         return Ok(());

@@ -30,7 +30,7 @@ pub async fn mcp_http(http: &reqwest::Client, url: &str, auth: Option<(&str, &st
     call_output(rpc_result(r?)?)
 }
 
-async fn read_http(resp: reqwest::Response, id: i64) -> Result<Value, ApiError> {
+async fn read_http(mut resp: reqwest::Response, id: i64) -> Result<Value, ApiError> {
     let status = resp.status();
     let sse = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).is_some_and(|c| c.starts_with("text/event-stream"));
     if !status.is_success() {
@@ -44,7 +44,6 @@ async fn read_http(resp: reqwest::Response, id: i64) -> Result<Value, ApiError> 
     }
     // ponytail: buffers the stream until our response shows up; fine for a single call per session
     let mut buf = String::new();
-    let mut resp = resp;
     while let Some(chunk) = resp.chunk().await.map_err(|e| tool_err(format!("mcp: {}", e.without_url())))? {
         buf.push_str(&String::from_utf8_lossy(&chunk));
         if buf.len() > READ_CAP {

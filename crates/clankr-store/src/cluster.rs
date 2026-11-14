@@ -157,7 +157,6 @@ impl Store {
             .map(drop)
     }
 
-    /// The node a credential belongs to, if any.
     pub async fn node_for_credential(&self, credential: &str) -> Result<Option<String>, ApiError> {
         sqlx::query_scalar("select name from nodes where credential_hash = $1 or (prev_credential_hash = $1 and prev_valid_until > now())")
             .bind(hash_credential(credential))
@@ -223,7 +222,6 @@ impl Store {
 }
 
 impl Store {
-    /// cordon: no new placements. drain: cordon + move instances off (volume-pinned ones stay).
     /// Stores an instance's hibernation checkpoint under its slot (bumping the slot's version)
     /// and marks the instance hibernated. Only the instance's current epoch may do this.
     pub async fn record_checkpoint(&self, ns: &str, instance: &str, epoch: i64, state: Option<&Value>, supported: bool) -> Result<i64, ApiError> {
@@ -261,6 +259,7 @@ impl Store {
         Ok(version)
     }
 
+    /// cordon: no new placements. drain: cordon + move instances off (volume-pinned ones stay).
     pub async fn set_node_maintenance(&self, name: &str, cordoned: bool, draining: bool) -> Result<(), ApiError> {
         let n = sqlx::query("update nodes set cordoned = $2, draining = $3 where name = $1")
             .bind(name)

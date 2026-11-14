@@ -56,7 +56,6 @@ async fn signed_deliveries_become_events() {
     assert_eq!(m.payload["body"]["after"], "abc123");
     assert_eq!(m.payload["headers"]["x-github-event"], "push");
     assert!(m.payload["headers"].get("x-hub-signature-256").is_none(), "signatures aren't forwarded");
-    // GitHub retries the same delivery: it's published once
     assert_eq!(gh(format!("sha256={}", hmac_hex("octocat", body.as_bytes())), "d-1").send().await.unwrap().status(), 200);
     assert!(store.mailbox_receive(NS, "inbox", "t", 1, 1.0).await.unwrap().is_empty(), "a retried delivery isn't delivered twice");
     // a bad signature is refused and audited; the secret isn't needed to say so

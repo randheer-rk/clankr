@@ -205,7 +205,6 @@ app.run()
 "#;
     let mark = e.tmp.path().join("crashed-once");
     e.agent("flaky", script, json!({})).await;
-    // point the agent at the marker file
     let mut a = e.store.get(NS, "Agent", "flaky").await.unwrap();
     a.spec["runtime"]["env"]["MARK"] = json!(mark);
     e.store.update(&ctx(), a).await.unwrap();

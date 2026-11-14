@@ -37,7 +37,6 @@ fn res(kind: &str, name: &str, spec: Value) -> Resource {
     serde_json::from_value(json!({"apiVersion": "clankr.io/v1alpha1", "kind": kind, "metadata": {"name": name, "namespace": NS}, "spec": spec})).unwrap()
 }
 
-// the same agent on the TypeScript SDK
 const TS_AGENT: &str = r#"
 import { AgentApp } from "SDK/src/index.ts"
 const app = new AgentApp()
@@ -67,7 +66,6 @@ async fn hibernation_works_with_the_typescript_sdk() {
     roundtrip(json!({"type": "process", "command": ["node", tmp.path().join("agent.ts")]}), tmp).await;
 }
 
-// and on the Go SDK
 const GO_AGENT: &str = r#"
 package main
 
@@ -140,7 +138,7 @@ async fn roundtrip(runtime: Value, tmp: tempfile::TempDir) {
     ));
     let engine = Engine::new(s.clone());
     let run_job = |tag: &'static str| {
-        let (engine, s) = (engine.clone(), s.clone());
+        let engine = engine.clone();
         async move {
             let run = engine.start(&ctx(), NS, "job", json!({"tag": tag}), None).await.unwrap();
             let end = Instant::now() + Duration::from_secs(30);
@@ -148,7 +146,6 @@ async fn roundtrip(runtime: Value, tmp: tempfile::TempDir) {
                 let r = engine.get(NS, run.run_id).await.unwrap();
                 if r.status != RunStatus::Running {
                     assert_eq!(r.status, RunStatus::Succeeded, "{:?}", r.state.error);
-                    let _ = &s;
                     return r.state.data["w"].clone();
                 }
                 assert!(Instant::now() < end, "run {tag} didn't finish");

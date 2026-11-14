@@ -78,8 +78,7 @@ fn exceeded(key: &str, hard: f64, now: f64, after: f64) -> ApiError {
     ApiError::new(ErrorCode::QuotaExceeded, format!("ResourceQuota {key}: {after} would exceed the limit {hard} (in use: {now})"))
 }
 
-/// Checks a create/update against the namespace's quotas. Returns the lock guard; hold it until
-/// the write has committed.
+/// Checks a create/update against the namespace's quotas; hold the returned lock guard until the write has committed.
 pub(crate) async fn admit(store: &Store, r: &Resource) -> Result<Option<sqlx::Transaction<'static, sqlx::Postgres>>, ApiError> {
     let ns = &r.metadata.namespace;
     // relevant: the object's own count, plus compute/volume totals for the kinds that feed them
@@ -122,8 +121,7 @@ pub(crate) async fn admit_run(store: &Store, ns: &str) -> Result<Option<sqlx::Tr
     Ok(Some(guard))
 }
 
-/// Quotas (limit vs. use) and budgets (current window) for one namespace: the data behind the
-/// budgets dashboard and `clank usage`.
+/// Quotas (limit vs. use) and budgets (current window) for one namespace.
 async fn usage(State(s): State<AppState>, Path(ns): Path<String>) -> ApiResult<Json<Value>> {
     let hard = hard(&s.store, &ns).await?;
     let used = measure(&s.store, &ns, &hard.keys().collect::<Vec<_>>(), None).await?;

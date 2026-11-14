@@ -1,6 +1,4 @@
-//! Model gateway (PRD §16.1, §27). Agents name a ModelClaim; the gateway resolves it to a
-//! ProviderConnection, checks the model allowlist and token budget, brokers the credential
-//! (the agent never sees it), calls the provider, and records usage.
+//! Model gateway (PRD §16.1, §27): resolves a ModelClaim to a ProviderConnection, checks allowlist and budget, brokers the credential (the agent never sees it), records usage.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -34,13 +32,11 @@ pub enum Provider {
     Bedrock,
     /// Deterministic, offline; for tests and `clank dev`.
     Mock,
-    /// Answers from `script` only (golden traces); an unscripted prompt is an error, so
-    /// evaluations notice when an agent's prompts drift.
+    /// Answers from `script` only (golden traces); an unscripted prompt is an error, so prompt drift is noticed.
     Replay,
 }
 
-/// One scripted response for the replay provider. Matched by exact prompt hash when given,
-/// else by `contains` (substring of the system prompt and messages).
+/// One scripted replay response, matched by exact prompt hash when given, else by `contains` (substring of the system prompt and messages).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReplayEntry {
@@ -64,7 +60,6 @@ pub struct SecretRef {
     pub key: String,
 }
 
-/// `kind: ProviderConnection` spec.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderConnectionSpec {
@@ -108,7 +103,6 @@ impl Price {
     }
 }
 
-/// `kind: ModelClaim` spec.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelClaimSpec {
@@ -139,8 +133,7 @@ fn default_max_output() -> u32 {
     4096
 }
 
-/// Token and cost ceilings. Enforced before dispatch with reservations, so parallel calls can't
-/// overshoot. Cost limits need `pricing` for the model on the ProviderConnection.
+/// Token and cost ceilings, reserved before dispatch so parallel calls can't overshoot; cost limits need `pricing` on the ProviderConnection.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Budget {
@@ -289,16 +282,14 @@ pub fn admit_claim(spec: &serde_json::Value) -> Result<ModelClaimSpec, ApiError>
     Ok(s)
 }
 
-/// Identity of a prompt for golden traces: system text and messages, nothing else (model,
-/// limits and attribution don't change what the model was asked).
+/// Identity of a prompt for golden traces: system text and messages only (model, limits and attribution don't change what was asked).
 pub fn prompt_sha256(req: &GenerateRequest) -> String {
     use sha2::{Digest, Sha256};
     let canon = serde_json::json!({"system": req.system, "messages": req.messages});
     hex::encode(Sha256::digest(canon.to_string().as_bytes()))
 }
 
-/// Rough pre-dispatch input estimate (~4 chars/token). Only used to reserve budget;
-/// the provider's reported usage is what gets charged.
+/// Rough input estimate (~4 chars/token), only to reserve budget; the provider's reported usage is what gets charged.
 fn estimate_input(req: &GenerateRequest) -> i64 {
     let chars: usize = req.messages.iter().map(|m| m.content.len()).sum::<usize>() + req.system.as_ref().map_or(0, String::len);
     (chars as i64 / 4).max(1)
@@ -330,8 +321,7 @@ impl Gateway {
         self
     }
 
-    /// The claim and its connection, loaded per call so deleting or editing either takes
-    /// effect immediately (SEC-18), with the model checked against the allowlist.
+    /// Loaded per call so deleting or editing the claim or connection takes effect immediately (SEC-18).
     async fn resolve(&self, ns: &str, claim_name: &str) -> Result<(ModelClaimSpec, ProviderConnectionSpec, String), ApiError> {
         let claim = admit_claim(&self.store.get(ns, "ModelClaim", claim_name).await?.spec)?;
         let conn = admit_connection(&self.store.get(ns, "ProviderConnection", &claim.provider_connection).await?.spec)?;
@@ -342,8 +332,7 @@ impl Gateway {
         Ok((claim, conn, provider_name))
     }
 
-    /// One chat call. The span is named and attributed per the OpenTelemetry GenAI semantic
-    /// conventions (`chat {model}`, `gen_ai.*`); prompts never land in attributes (CL-34-05).
+    /// One chat call; the span follows the OpenTelemetry GenAI conventions and prompts never land in attributes (CL-34-05).
     pub async fn generate(&self, ctx: &RequestCtx, ns: &str, claim_name: &str, req: GenerateRequest) -> Result<GenerateResponse, ApiError> {
         if req.messages.is_empty() {
             return Err(invalid("messages", "at least one message"));
@@ -455,8 +444,7 @@ impl Gateway {
         Ok(GenerateResponse { text, stop_reason, usage, provider: conn.provider, model: claim.model, connection: claim.provider_connection })
     }
 
-    /// The credential a call carries: the secret's value, or for Vertex an access token minted
-    /// from the service account in the secret (cached until it nears expiry).
+    /// The secret's value, or for Vertex an access token minted from the service account in it (cached until it nears expiry).
     async fn credential(&self, ctx: &RequestCtx, ns: &str, conn_name: &str, conn: &ProviderConnectionSpec, purpose: &str) -> Result<Option<String>, ApiError> {
         let Some(r) = &conn.secret_ref else { return Ok(None) };
         if conn.provider != Provider::Vertex {
@@ -536,9 +524,7 @@ impl Gateway {
         Ok(EmbedResponse { embeddings: e.vectors, usage: Usage { input_tokens: e.input_tokens, output_tokens: 0 }, provider: conn.provider, model: claim.model, connection: claim.provider_connection })
     }
 
-    /// Every counter this call must fit: the claim's own limits and each AgentBudget in the
-    /// namespace (current calendar window). Sorted, so concurrent reservations lock rows in the
-    /// same order and can't deadlock.
+    /// Every counter this call must fit, sorted so concurrent reservations lock rows in the same order and can't deadlock.
     async fn buckets(&self, ns: &str, claim: &str, b: &Budget, run: Option<Uuid>) -> Result<Vec<Bucket>, ApiError> {
         let mut out = vec![];
         let mut add = |key: String, scope: String, max: Option<i64>, cost: bool, what: String| {
@@ -560,7 +546,7 @@ impl Gateway {
             let (name, window) = (&r.metadata.name, spec.period.window(now));
             add(format!("budget:{name}"), window.clone(), spec.max_tokens, false, format!("AgentBudget {name}: token budget for {window}"));
             add(format!("budget-cost:{name}"), window.clone(), usd(spec.max_cost_usd), true, format!("AgentBudget {name}: cost budget for {window}"));
-            tags.push((name.clone(), spec.alerts.clone(), spec.webhook.clone()));
+            tags.push((name.clone(), spec.alerts, spec.webhook));
         }
         for (name, alerts, webhook) in tags {
             for b in out.iter_mut().filter(|b| b.key == format!("budget:{name}") || b.key == format!("budget-cost:{name}")) {

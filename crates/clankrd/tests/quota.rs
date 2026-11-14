@@ -88,7 +88,6 @@ async fn quotas_hold_under_concurrency_and_cap_runs() {
     assert_eq!(s.put("AgentDeployment", "d", dep(3)).await, StatusCode::OK, "1.5 is over 1 but less than before");
     assert_eq!(s.put("AgentDeployment", "d", dep(4)).await, TOO_MANY);
 
-    // volumes
     assert_eq!(s.put("VolumeClaim", "v1", json!({"capacityMiB": 64})).await, StatusCode::CREATED);
     assert_eq!(s.put("VolumeClaim", "v2", json!({"capacityMiB": 64})).await, TOO_MANY);
 
@@ -104,7 +103,6 @@ async fn quotas_hold_under_concurrency_and_cap_runs() {
     assert!(s.call(M::POST, &format!("/runs/{id}/cancel"), Some(json!({"reason": "test"}))).await.0.is_success());
     assert_eq!(s.call(M::POST, "/workflows/w/runs", Some(json!({}))).await.0, StatusCode::CREATED);
 
-    // the usage report
     assert_eq!(s.put("AgentBudget", "monthly", json!({"period": "month", "maxTokens": 1000, "maxCostUSD": 5})).await, StatusCode::CREATED);
     let (st, u) = s.call(M::GET, "/usage", None).await;
     assert_eq!(st, StatusCode::OK);

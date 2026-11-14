@@ -1,8 +1,5 @@
 //! A2A (Agent2Agent v1.0) server side (ADR 0038): every AgentService is an A2A agent.
 //!
-//!   GET  /a2a/{ns}/{svc}/.well-known/a2a/agent-card.json   the agent card
-//!   POST /a2a/{ns}/{svc}                                   JSON-RPC: SendMessage, GetTask
-//!
 //! A message becomes a request to the service (sender `a2a:<principal>`); the reply comes
 //! back as a Message. When the caller asks to return immediately, or the reply doesn't arrive
 //! in time, the request is a Task whose id is the request id, and GetTask looks for its reply.
@@ -106,11 +103,11 @@ async fn send_message(s: &AppState, ctx: &RequestCtx, ns: &str, svc: &str, param
     if !msg["parts"].is_array() {
         return Err(ApiError::new(ErrorCode::InvalidSpec, "params.message.parts is required"));
     }
+    let sender = format!("a2a:{}", ctx.actor);
     let payload = json!({
-        "text": text_of(msg), "data": data_of(msg), "from": format!("a2a:{}", ctx.actor), "platform": "a2a",
+        "text": text_of(msg), "data": data_of(msg), "from": sender, "platform": "a2a",
         "messageId": msg["messageId"], "contextId": msg["contextId"],
     });
-    let sender = format!("a2a:{}", ctx.actor);
     let timeout = 300;
     let dedup = msg["messageId"].as_str().map(|m| format!("a2a:{}:{m}", ctx.actor));
     let req = service_request(s, ns, svc, &sender, &payload, timeout, dedup.as_deref()).await?;
@@ -129,14 +126,12 @@ async fn send_message(s: &AppState, ctx: &RequestCtx, ns: &str, svc: &str, param
 async fn get_task(s: &AppState, ns: &str, svc: &str, params: &Value) -> Result<Value, ApiError> {
     let id: Uuid = params["id"].as_str().and_then(|i| i.parse().ok()).ok_or_else(|| ApiError::new(ErrorCode::NotFound, "task not found"))?;
     let req = s.store.mailbox_get(ns, &format!("svc:{svc}"), id).await?.ok_or_else(|| ApiError::new(ErrorCode::NotFound, "task not found"))?;
-    // the reply, if it's there
     if let Some(q) = &req.reply_to
         && let Some(m) = s.store.mailbox_receive(ns, q, "a2a", 1, 60.0).await?.pop()
     {
         s.store.mailbox_ack(ns, q, m.id, m.lease_epoch).await?;
         return Ok(task(&id.to_string(), "TASK_STATE_COMPLETED", Some(agent_message(&m.payload, &Value::Null))));
     }
-    // else the request's own state says what's happening
     Ok(match req.state.as_str() {
         "dead" => task(&id.to_string(), "TASK_STATE_FAILED", Some(json!({"role": "ROLE_AGENT", "parts": [{"text": req.dead_reason.unwrap_or_else(|| "not handled".into())}]}))),
         "leased" | "acked" => task(&id.to_string(), "TASK_STATE_WORKING", None),

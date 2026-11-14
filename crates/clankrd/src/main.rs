@@ -9,90 +9,82 @@ use clankr_store::secrets::MasterKey;
 use clap::Parser;
 use rand::distr::{Alphanumeric, SampleString};
 
-/// Clankr control-plane daemon.
+
 #[derive(Parser)]
 struct Args {
     #[arg(long, env = "CLANKR_LISTEN", default_value = "127.0.0.1:7600")]
     listen: SocketAddr,
-    /// Postgres URL. Required unless --dev.
+    
     #[arg(long, env = "DATABASE_URL", required_unless_present = "dev")]
     database_url: Option<String>,
-    /// Run a private embedded Postgres under --data-dir instead of DATABASE_URL.
+    
     #[arg(long)]
     dev: bool,
+   
     #[arg(long, env = "CLANKR_DATA_DIR")]
     data_dir: Option<PathBuf>,
-    /// Serve plain HTTP (no TLS). Nodes can't join; for debugging only.
+    
     #[arg(long, env = "CLANKR_INSECURE_HTTP", value_parser = clap::builder::FalseyValueParser::new())]
     insecure_http: bool,
-    /// Extra names (DNS or IP) for the API server certificate.
+    
     #[arg(long = "tls-san")]
     tls_san: Vec<String>,
-    /// OIDC issuer URL for user login (ID tokens as bearer tokens). Off when unset.
+    
     #[arg(long, env = "CLANKR_OIDC_ISSUER", requires = "oidc_audience")]
     oidc_issuer: Option<String>,
-    /// Expected `aud` (your client id at the IdP).
+    
     #[arg(long, env = "CLANKR_OIDC_AUDIENCE")]
     oidc_audience: Option<String>,
-    /// Claim naming the user in RoleBinding subjects (`user:<value>`).
+    
     #[arg(long, env = "CLANKR_OIDC_USER_CLAIM", default_value = "email")]
     oidc_user_claim: String,
+    
     #[arg(long, env = "CLANKR_OIDC_GROUPS_CLAIM", default_value = "groups")]
     oidc_groups_claim: String,
-    /// Public OIDC client the web UI uses (authorization code + PKCE); defaults to the audience.
+    
     #[arg(long, env = "CLANKR_OIDC_CLIENT_ID")]
     oidc_client_id: Option<String>,
-    /// kennel binary for sandboxed tools (`sandbox` and `mcpStdio` executors); off when unset.
+    
     #[arg(long, env = "CLANKR_TOOL_KENNEL")]
     tool_kennel: Option<PathBuf>,
-    /// kennel image store for sandboxed tools (default: kennel's own).
+    
     #[arg(long, env = "CLANKR_TOOL_KENNEL_ROOT")]
     tool_kennel_root: Option<PathBuf>,
-    /// Wrap secrets' data keys with a KMS instead of the local master key:
-    /// vault+https://vault:8200/<transit mount>/<key> (token from $VAULT_TOKEN).
+    
     #[arg(long, env = "CLANKR_KMS", global = true)]
     kms: Option<String>,
-    /// Ship the audit chain off-site as it's written: file:///path.jsonl, s3://bucket/prefix
-    /// (AWS_* credentials; CLANKR_AUDIT_S3_ENDPOINT for MinIO) or https://receiver.
+   
     #[arg(long, env = "CLANKR_AUDIT_EXPORT")]
     audit_export: Option<String>,
-    /// Directory with pg_dump/pg_restore (default: PATH, or the embedded server's with --dev).
+   
     #[arg(long, env = "CLANKR_PG_BIN", global = true)]
     pg_bin: Option<PathBuf>,
+    
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
 
-/// Without a subcommand clankrd serves the API.
 #[derive(clap::Subcommand)]
 enum Cmd {
-    /// Write a consistent backup (database snapshot + manifest + CA cert) to a new directory.
     Backup {
         out: PathBuf,
-        /// Also copy master.key and ca.key into the backup. Off by default: escrow keys separately.
         #[arg(long)]
         include_keys: bool,
     },
-    /// Restore a backup into an empty database, then verify it.
+    
     Restore {
         dir: PathBuf,
-        /// Master key file when the backup doesn't include it (or set CLANKR_MASTER_KEY).
         #[arg(long)]
         master_key_file: Option<PathBuf>,
     },
-    /// Check a database against a backup's manifest (audit chain, secrets, run replay, counts).
+    
     Verify { dir: PathBuf },
-    /// Compare an off-site audit export (a JSONL file, or s3://bucket/prefix) with the database:
-    /// exit 1 if rows were removed or changed, or the export itself was edited.
+    
     AuditCheck { export: String },
-    /// Rewrap every secret's data key with the current key-encryption key: moves secrets onto
-    /// --kms (or a rotated Vault key version), and upgrades rows from before envelope encryption.
+    
     RewrapSecrets,
-    /// Re-encrypt every secret under a new master key and swap `<data-dir>/master.key`. Stop
-    /// every clankrd first: running ones hold the old key. The old key is kept as
-    /// `master.key.<fingerprint>.old` for restoring older backups.
+    
     RotateMasterKey {
-        /// The new key (64 hex chars); generated when omitted.
         #[arg(long)]
         new_key_file: Option<PathBuf>,
     },
@@ -102,11 +94,11 @@ enum Cmd {
 async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let otel = clankrd::telemetry::init()?;
+    
     let args = Args::parse();
-    let data_dir = args.data_dir.unwrap_or_else(|| xdg("XDG_DATA_HOME", ".local/share"));
+    let data_dir = args.data_dir.unwrap_or_else(|| xdg("XDG_DATA_HOME", ".local/share/clankr"));
     std::fs::create_dir_all(&data_dir)?;
 
-    // Keep the embedded server alive for the life of the process; dropping it stops Postgres.
     let mut _dev_pg = None;
     let url = match args.database_url {
         Some(u) if !args.dev => u,
@@ -122,29 +114,38 @@ async fn main() -> anyhow::Result<()> {
         let token = std::env::var("VAULT_TOKEN").context("--kms needs $VAULT_TOKEN")?;
         let _ = KMS.set(clankr_store::secrets::VaultTransit::parse(url, token)?);
     }
+
     let pg_bin = args.pg_bin.clone().or_else(|| _dev_pg.as_ref().map(DevPostgres::bin_dir));
+
     if let Some(cmd) = args.cmd {
         return run_maintenance(cmd, &url, &data_dir, pg_bin.as_deref()).await;
     }
 
     let store = Store::connect(&url).await.context("connect metadata store")?;
     finish_rotation(&store, &data_dir).await?;
+
     let master = load_or_create_master_key(&data_dir)?;
     let join_token = match std::env::var("CLANKR_JOIN_TOKEN") {
         Ok(t) => t,
         Err(_) => load_or_create_secret_file("join-token")?,
     };
+
     let mut state = clankrd::AppState::with_join_token(store.clone(), load_or_create_token()?, master, join_token).await?;
+    
     if let (Some(issuer), Some(aud)) = (args.oidc_issuer, args.oidc_audience) {
         tracing::info!(%issuer, "OIDC user login enabled");
         let mut o = clankrd::authz::Oidc::new(issuer, aud, args.oidc_user_claim, args.oidc_groups_claim);
+
         o.client_id = args.oidc_client_id;
         state.oidc = Some(std::sync::Arc::new(o));
     }
+
     if let Some(kennel) = args.tool_kennel {
         tracing::info!(kennel = %kennel.display(), "sandboxed tools enabled");
+
         state.gateway = state.gateway.clone().with_sandbox(clankr_gateway::sandbox::Sandbox { kennel, root: args.tool_kennel_root });
     }
+
     let tls = if args.insecure_http {
         tracing::warn!("serving plain HTTP: credentials travel unencrypted and nodes can't join");
         None
@@ -152,26 +153,36 @@ async fn main() -> anyhow::Result<()> {
         let ca = clankr_tls::Ca::load_or_create(&data_dir.join("pki"))?;
         let mut names = vec!["localhost".to_owned(), "127.0.0.1".to_owned(), "::1".to_owned()];
         names.extend(args.tls_san.iter().cloned());
+        
         let (cert, key) = ca.server_cert(&names)?;
         let cfg = ca.server_config(&cert, &key)?;
+        
         tracing::info!(ca = %data_dir.join("pki/ca.crt").display(), "TLS enabled; clients and nodes trust this CA");
+        
         state.ca = Some(std::sync::Arc::new(ca));
         Some(cfg)
     };
+
     clankrd::spawn_ticker(state.engine.clone());
     clankrd::spawn_tool_sweeper(state.gateway.clone());
-    // every clankrd runs the loop; the Postgres lease makes exactly one of them the scheduler
+    
     let holder = format!("{}-{}", std::fs::read_to_string("/etc/hostname").unwrap_or_default().trim(), std::process::id());
+
     if let Some(dest) = args.audit_export.clone() {
         clankrd::audit_export::spawn(store.clone(), holder.clone(), dest, std::time::Duration::from_secs(2));
     }
-    clankrd::cron::spawn(store.clone(), clankr_engine::Engine::new(store.clone()), holder.clone(), std::time::Duration::from_secs(15));
-    clankrd::chat::spawn(state.clone(), holder.clone(), std::time::Duration::from_secs(10));
-    clankrd::scheduler::spawn(store, holder, std::time::Duration::from_secs(1));
-    let app = clankrd::router(state);
 
+    clankrd::cron::spawn(store.clone(), clankr_engine::Engine::new(store.clone()), holder.clone(), std::time::Duration::from_secs(15));
+    
+    clankrd::chat::spawn(state.clone(), holder.clone(), std::time::Duration::from_secs(10));
+    
+    clankrd::scheduler::spawn(store, holder, std::time::Duration::from_secs(1));
+    
+    let app = clankrd::router(state);
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
+    
     tracing::info!(listen = %args.listen, dev = args.dev, tls = tls.is_some(), "clankrd ready");
+    
     match tls {
         Some(cfg) => {
             tokio::select! {
@@ -187,7 +198,7 @@ async fn main() -> anyhow::Result<()> {
                 .await?
         }
     }
-    // flush buffered spans before exit
+    
     if let Some(p) = otel {
         let _ = p.shutdown();
     }
@@ -201,6 +212,7 @@ async fn run_maintenance(cmd: Cmd, url: &str, data_dir: &std::path::Path, pg_bin
             println!("{} {:<11} {}", if c.ok { "ok  " } else { "FAIL" }, c.name, c.detail);
         }
     };
+
     match cmd {
         Cmd::RewrapSecrets => {
             let store = Store::connect(url).await.context("connect metadata store")?;
@@ -296,11 +308,15 @@ async fn run_maintenance(cmd: Cmd, url: &str, data_dir: &std::path::Path, pg_bin
     }
 }
 
-/// Keeps the old key beside it, then makes `master.key.new` the master key.
 fn swap_in_new_key(data_dir: &std::path::Path, old: &MasterKey) -> anyhow::Result<()> {
-    let key = data_dir.join("master.key");
-    std::fs::rename(&key, data_dir.join(format!("master.key.{}.old", &clankrd::backup::key_fingerprint(old)[..16])))?;
-    std::fs::rename(data_dir.join("master.key.new"), key)?;
+    let key_path = data_dir.join("master.key");
+    let new_key_path = data_dir.join("master.key.new");
+    
+    let fingerprint = clankrd::backup::key_fingerprint(old);
+    let backup_path = data_dir.join(format!("master.key.{}.old", &fingerprint[..16]));
+
+    std::fs::rename(&key_path, backup_path)?;
+    std::fs::rename(new_key_path, key_path)?;
     Ok(())
 }
 

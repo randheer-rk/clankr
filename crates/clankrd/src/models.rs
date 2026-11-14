@@ -1,10 +1,4 @@
-//! Secrets (write-only) and the model gateway.
-//!
-//!   PUT    /v1/namespaces/{ns}/secrets/{name}   {data: {key: value}}  -> metadata (never values)
-//!   GET    /v1/namespaces/{ns}/secrets[/{name}]                      -> metadata
-//!   DELETE /v1/namespaces/{ns}/secrets/{name}
-//!   POST   /v1/namespaces/{ns}/models/{claim}/generate                -> text, usage, provenance
-//!   POST   /v1/namespaces/{ns}/models/{claim}/embed                   -> vectors, usage, provenance
+//! Secrets (write-only: reads return metadata, never values) and the model gateway.
 
 use std::collections::BTreeMap;
 
@@ -93,9 +87,8 @@ async fn call_tool(
             return Err(clankr_types::ApiError::new(clankr_types::ErrorCode::Forbidden, format!("agent {} is not bound to ToolClaim {claim:?}", w.agent)).into());
         }
     }
-    // a node that can run containers takes container tools itself (ADR 0028)
-    // only trusted executors may (their reported results are recorded as the outcome): nodes
-    // under a workload identity, or a standalone node running with the break-glass owner token
+    // a node that can run containers takes container tools itself (ADR 0028); only trusted executors may (their reported results are
+    // recorded as the outcome): nodes under a workload identity, or a standalone node running with the break-glass owner token
     let trusted = claims.is_some() || ctx.actor == "owner";
     let at = if trusted && headers.get("x-clankr-executor").is_some_and(|v| v == "node") { Placement::Caller } else { Placement::Here };
     let ctx = RequestCtx { actor: writer(&ctx, &headers, claims.as_ref()), ..ctx };

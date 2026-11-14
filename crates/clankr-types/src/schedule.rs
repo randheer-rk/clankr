@@ -5,7 +5,7 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{ApiError, ErrorCode};
+use crate::{ApiError, invalid};
 
 /// Runs `workflow` with `input` on `schedule` (5-field cron, UTC).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -40,10 +40,6 @@ pub struct EventTriggerSpec {
     pub workflow: String,
     #[serde(default)]
     pub input: Value,
-}
-
-fn invalid(field: &str, m: impl Into<String>) -> ApiError {
-    ApiError::new(ErrorCode::InvalidSpec, m).field(field)
 }
 
 pub fn admit_cron_job(spec: &Value) -> Result<CronJobSpec, ApiError> {

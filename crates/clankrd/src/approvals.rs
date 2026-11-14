@@ -1,9 +1,4 @@
-//! Approval inbox API (HUM-02):
-//!
-//!   GET  /v1/namespaces/{ns}/approvals                 (?state=pending&mine=true)
-//!   GET  /v1/namespaces/{ns}/approvals/{id}
-//!   POST /v1/namespaces/{ns}/approvals/{id}/approve    {digest, comment?}
-//!   POST /v1/namespaces/{ns}/approvals/{id}/reject     {digest, comment?}
+//! Approval inbox API (HUM-02).
 //!
 //! `mine=true` lists what the caller can actually decide: their groups, not runs they started.
 

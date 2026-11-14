@@ -87,7 +87,6 @@ async fn python_agent_runs_sandboxed_in_a_kennel_container() {
     let image = kennel(&kbin, &kroot, &["build", "-t", "research/researcher:test", ctx_dir.to_str().unwrap()]).unwrap();
     let pinned = format!("research/researcher@{}", image.rsplit_once('@').unwrap().1);
 
-    // control plane
     let _ = rustls::crypto::ring::default_provider().install_default();
     let pg = DevPostgres::start(None).await.unwrap();
     let store = Store::connect(&pg.database("clankr").await.unwrap()).await.unwrap();

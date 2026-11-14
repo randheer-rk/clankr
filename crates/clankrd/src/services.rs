@@ -1,10 +1,6 @@
 //! Agent services, request/reply and topics (PRD §30), on the mailbox machinery: every message
 //! is durable, delivered at least once, fenced by epoch and dead-lettered by policy.
 //!
-//!   POST /v1/namespaces/{ns}/services/{svc}/call     {payload, timeoutSeconds?, dedupKey?} -> {reply, requestId}
-//!   POST /v1/namespaces/{ns}/services/{svc}/reply    {requestId, payload}   (the serving agent)
-//!   POST /v1/namespaces/{ns}/topics/{topic}/publish  {payload, dedupKey?}  -> {delivered}
-//!
 //! A service's requests wait in queue `svc:<name>`; its agent's instances receive, ack and nack
 //! them through the mailbox API. A call's request expires at the call's timeout, so nobody picks
 //! up a request whose caller has given up; a late reply lands in `reply:<id>`, nobody reads

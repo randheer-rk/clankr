@@ -125,11 +125,10 @@ async fn handle(mut c: UnixStream, e: &Egress) -> Result<()> {
         tracing::warn!(who = %e.who, %host, port, "egress refused: not in Agent.spec.egress");
         return reply(&mut c, "403 Forbidden", &format!("{host}:{port} is not in this agent's egress allowlist")).await;
     }
-    let addrs: Vec<SocketAddr> = match tokio::time::timeout(TIMEOUT, tokio::net::lookup_host((host.as_str(), port))).await {
-        Ok(Ok(a)) => a.collect(),
+    let candidates: Vec<SocketAddr> = match tokio::time::timeout(TIMEOUT, tokio::net::lookup_host((host.as_str(), port))).await {
+        Ok(Ok(a)) => a.filter(|a| e.allow_private || !private(a.ip())).collect(),
         _ => return reply(&mut c, "502 Bad Gateway", &format!("can't resolve {host}")).await,
     };
-    let candidates: Vec<SocketAddr> = addrs.into_iter().filter(|a| e.allow_private || !private(a.ip())).collect();
     if candidates.is_empty() {
         tracing::warn!(who = %e.who, %host, "egress refused: resolves only to private addresses");
         return reply(&mut c, "403 Forbidden", &format!("{host} resolves to a private address")).await;
@@ -207,7 +206,6 @@ mod tests {
 
     #[tokio::test]
     async fn tunnels_forwards_and_refuses() {
-        // upstream: answers any request with a fixed HTTP response, then closes
         let up = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = up.local_addr().unwrap().port();
         tokio::spawn(async move {

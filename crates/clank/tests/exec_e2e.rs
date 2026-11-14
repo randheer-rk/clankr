@@ -93,15 +93,15 @@ async fn exec_into_an_agent_container() {
     let (stop, rx) = tokio::sync::watch::channel(false);
     let node = tokio::spawn(run_fleet(
         FleetConfig {
-            server: node_addr.clone(),
+            server: node_addr,
             ca_pem,
             name: "exec-node".into(),
             join_token: "join".into(),
             capacity: json!({"memoryMiB": 2048, "cpus": 2.0, "runtimes": ["oci"]}),
             labels: json!({}),
             work_dir: tmp.path().join("node"),
-            kennel: kbin.clone(),
-            kennel_root: Some(kroot.clone()),
+            kennel: kbin,
+            kennel_root: Some(kroot),
             heartbeat: Duration::from_millis(500),
             fence_after: Duration::from_secs(30),
             renew_before: Duration::from_secs(86_400),
@@ -127,7 +127,7 @@ async fn exec_into_an_agent_container() {
     }
     assert!(ready, "the agent instance never became ready");
 
-    let out = tokio::task::spawn_blocking({
+    let (ok, viewer) = tokio::task::spawn_blocking({
         let clank = clank.clone();
         move || {
             let ok = clank(&dev, &["exec", "-n", NS, "idle", "--", "sh", "-c", "read l; echo \"got $l as $(id -u)\"; ls /app; exit 7"], "hello\n");
@@ -137,7 +137,6 @@ async fn exec_into_an_agent_container() {
     })
     .await
     .unwrap();
-    let (ok, viewer) = out;
     let stdout = String::from_utf8_lossy(&ok.stdout);
     assert_eq!(ok.status.code(), Some(7), "exit status passes through: {stdout} {}", String::from_utf8_lossy(&ok.stderr));
     assert!(stdout.contains("got hello as 65534") && stdout.contains("agent.ts"), "{stdout}");

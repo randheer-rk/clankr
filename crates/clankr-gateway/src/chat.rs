@@ -32,7 +32,6 @@ pub fn base(kind: ChatKind, endpoint: &str) -> String {
     (if endpoint.is_empty() { d } else { endpoint }).trim_end_matches('/').to_owned()
 }
 
-/// Sends `text` to `chat`, with optional buttons.
 pub async fn send(http: &reqwest::Client, kind: ChatKind, endpoint: &str, token: &str, chat: &str, text: &str, buttons: &[Button]) -> Result<Sent, ApiError> {
     match kind {
         ChatKind::Telegram => telegram::send_message(http, &base(kind, endpoint), token, chat, text, buttons).await,

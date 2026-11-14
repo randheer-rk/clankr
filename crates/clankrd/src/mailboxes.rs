@@ -1,11 +1,4 @@
 //! Mailbox API (PRD §30).
-//!
-//!   POST /v1/namespaces/{ns}/mailboxes/{mb}/messages              send {payload, correlationId?, dedupKey?, ttlSeconds?}
-//!   GET  /v1/namespaces/{ns}/mailboxes/{mb}/messages?state=&limit= (owner) inspect, incl. dead letters
-//!   POST /v1/namespaces/{ns}/mailboxes/{mb}/receive               {owner, max?, visibilitySeconds?, waitSeconds?}
-//!   POST /v1/namespaces/{ns}/mailboxes/{mb}/ack                   {id, epoch}
-//!   POST /v1/namespaces/{ns}/mailboxes/{mb}/nack                  {id, epoch, delaySeconds?, reason?}
-//!   POST /v1/namespaces/{ns}/mailboxes/{mb}/messages/{id}/requeue (owner) dead letter -> ready
 
 use std::time::Duration;
 
@@ -31,10 +24,8 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/namespaces/{ns}/mailboxes/{mb}/messages/{id}/requeue", post(requeue))
 }
 
-/// Who may use queue `mb`, and the authenticated sender name (CL-30-10). An AgentMailbox: an
-/// agent whose spec lists it. A service queue (`svc:<name>`): agents listing the service in
-/// `calls` send to it, and only its serving agent receives from it. Reply queues (`reply:…`)
-/// are only reachable through a call.
+/// Who may use queue `mb`, and the authenticated sender name (CL-30-10). An AgentMailbox: an agent whose spec lists it.
+/// `svc:<name>`: agents listing the service in `calls` send, only its serving agent receives. `reply:…` queues are reachable only through a call.
 pub(crate) async fn authorize(s: &AppState, ctx: &RequestCtx, headers: &HeaderMap, ns: &str, mb: &str, sending: bool) -> Result<(MailboxSpec, String), ApiError> {
     if let Some(svc) = mb.strip_prefix("svc:") {
         let spec = clankr_types::agent::admit_agent_service(&s.store.get(ns, "AgentService", svc).await?.spec)?;

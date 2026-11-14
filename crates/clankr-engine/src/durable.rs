@@ -356,15 +356,13 @@ impl Engine {
             .await
             .map_err(db)?;
 
-        // re-arm what was pending at the fork point, from the events that scheduled it
         let scheduled = |task: &str| {
             copied.iter().rev().find_map(|e| match &e.event {
                 Event::TaskScheduled { task: t, queue, .. } if t == task => Some(queue.clone()),
                 _ => None,
             })
         };
-        for (task, t) in state.tasks.iter().map(|(k, v)| (k, (v, "ready"))).chain(state.unknown.iter().map(|(k, v)| (k, (v, "unknown")))) {
-            let (p, st) = t;
+        for (task, (p, st)) in state.tasks.iter().map(|(k, v)| (k, (v, "ready"))).chain(state.unknown.iter().map(|(k, v)| (k, (v, "unknown")))) {
             let queue = scheduled(task).ok_or_else(|| err(ErrorCode::StorageUnavailable, format!("no TaskScheduled for {task}")))?;
             let side_effects = match g.nodes[&p.node].side_effects {
                 SideEffects::Idempotent => "idempotent",
@@ -525,8 +523,7 @@ impl Engine {
         match (state.as_str(), current == epoch) {
             ("completed" | "failed", true) => return Ok(()),
             ("leased", true) => {}
-            // the lease lapsed and the outcome was marked unknown, but the original holder
-            // reports back: that's the real answer, so it resolves the ambiguity
+            // the original holder reporting back after its lease lapsed is the real answer
             ("unknown", true) => {
                 let payload = match &outcome {
                     Event::TaskCompleted { result, .. } => serde_json::json!({ "outcome": "completed", "result": result }),
@@ -645,8 +642,7 @@ pub(crate) async fn audit(tx: &mut Tx, ctx: &RequestCtx, action: &str, ns: &str,
     audit_in_tx(tx, ctx, action, Some(target), true, None, None).await
 }
 
-/// One durable step: decide on `input`, append the resulting events, materialize the task and
-/// timer rows they imply, and store the folded state, all inside the caller's transaction.
+/// One durable step (see the module docs), all inside the caller's transaction.
 #[tracing::instrument(name = "engine.step", skip(tx, input), fields(run_id = %run_id, ns, input = input_kind(&input), events = tracing::field::Empty, status = tracing::field::Empty))]
 pub(crate) async fn step(tx: &mut Tx, run_id: Uuid, ns: &str, input: Event) -> Result<RunState, ApiError> {
     let row = sqlx::query("select graph, state, seq, started_by from workflow_runs where run_id = $1 and namespace = $2 for update")

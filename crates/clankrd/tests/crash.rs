@@ -46,7 +46,7 @@ impl Daemon {
 
     fn kill9(&mut self) {
         if let Some(mut c) = self.child.take() {
-            c.kill().unwrap(); // SIGKILL
+            c.kill().unwrap();
             c.wait().unwrap();
         }
     }
@@ -80,8 +80,7 @@ impl Client {
             if let Some(b) = body {
                 r = r.json(b);
             }
-            let r = r.send().await;
-            if let Ok(r) = r {
+            if let Ok(r) = r.send().await {
                 let status = r.status().as_u16();
                 if status == 503 {
                     // storage hiccup while the daemon was being killed mid-transaction
@@ -124,7 +123,7 @@ async fn runs_survive_repeated_kill_9() {
 
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let listen = format!("127.0.0.1:{port}");
-    let mut daemon = Daemon { child: None, url: url.clone(), listen: listen.clone() };
+    let mut daemon = Daemon { child: None, url, listen: listen.clone() };
     daemon.spawn();
     let client = Client { http: reqwest::Client::new(), base: format!("http://{listen}") };
 
@@ -162,7 +161,6 @@ async fn runs_survive_repeated_kill_9() {
         }));
     }
 
-    // approver: works the inbox, approving each run once it is waiting
     let approver = {
         let (client, stop) = (client.clone(), stop.clone());
         tokio::spawn(async move {
@@ -204,7 +202,6 @@ async fn runs_survive_repeated_kill_9() {
     eprintln!("{kills} kill -9s, {accepted} accepted completions");
     assert!(kills >= 5, "chaos too gentle: only {kills} kills");
 
-    // invariants
     for id in &ids {
         let run = engine.get(NS, *id).await.unwrap();
         assert_eq!(run.status, RunStatus::Succeeded, "run {id}: {:?}", run.state.error);
